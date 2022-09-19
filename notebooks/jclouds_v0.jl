@@ -511,6 +511,44 @@ md"""
 * image with node number
 """
 
+# ╔═╡ 99ea735c-26d2-4461-a910-33a0161e6f8d
+function _neighbours(coors, nodes, edges, steps, m)
+	
+	xstep, ystep   = steps
+	xx, yy         = coors
+	xedges, yedges = edges
+	
+	his      = [fit(Histogram, (vec(xx) .- mx * xstep, vec(yy) .- my * ystep), weights(vec(nodes)), (xedges, yedges)) for (mx, my) in m.moves]
+	contents = deepcopy(his[m.imove0].weights)
+	mask     = contents .> 0
+	borders  = [(h.weights .>0) .* (h.weights .!= contents) for h in his] 
+	isborder = reduce(.+, borders) .* mask
+		
+	return isborder, [h.weights for h in his]
+end
+
+
+# ╔═╡ 84256c52-046d-4c2a-9358-21564e12df88
+clnodes
+
+# ╔═╡ 3e341066-3bd7-4ccf-9702-3e04a05182fc
+nborders, borders = _neighbours((cl.x, cl.y), clnodes, cl.edges, steps_, mm)
+
+# ╔═╡ ad44b4a5-4a50-4d1d-a560-f9e6a66a34c1
+histogram2d(vec(cl.x), vec(cl.y), weights = vec(nborders), bins = cl.edges)
+
+# ╔═╡ 0a0511a6-7eac-40a0-b7a1-5062e3e6e222
+begin
+	function _nodes_table()
+end
+
+# ╔═╡ 7a0241d7-32fb-4ed1-a958-e251c5435363
+begin
+	xxx = [true, true, false]
+	yyy = [false, true, false]
+	zzz = reduce(.*, (xxx, yyy))
+end
+
 # ╔═╡ a07f8060-6502-49ff-9652-1826926e498f
 _path(CartesianIndex(1, 1))
 
@@ -581,6 +619,12 @@ end
 # ╠═012a7509-c783-4a27-a3f1-e1901080f2b3
 # ╠═61b326e6-8e27-45e1-b980-61034c314654
 # ╠═0fee2fb8-fdec-4479-9993-22e3071872ac
+# ╠═99ea735c-26d2-4461-a910-33a0161e6f8d
+# ╠═84256c52-046d-4c2a-9358-21564e12df88
+# ╠═3e341066-3bd7-4ccf-9702-3e04a05182fc
+# ╠═ad44b4a5-4a50-4d1d-a560-f9e6a66a34c1
+# ╠═0a0511a6-7eac-40a0-b7a1-5062e3e6e222
+# ╠═7a0241d7-32fb-4ed1-a958-e251c5435363
 # ╠═a07f8060-6502-49ff-9652-1826926e498f
 # ╠═e12fb4a4-f24e-43db-9d12-deebc6f2b0ba
 # ╠═3b5730e5-145c-4fed-99b0-2e1da1982f68
