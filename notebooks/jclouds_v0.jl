@@ -132,6 +132,8 @@ md"""
 * *_grad* computes the maximum gradient and its movement
 * *_curvatures* computes the curvature for each movement
 * *_minmax curvatures* compute the maximum and minimum curvature and their movements
+* *_nodes* associate each cell to a node number
+* *_neighbour node* associate each cell to the number of neighbour cells of other nodes, return the node number in any moves 
 
 """
 
@@ -238,6 +240,52 @@ function _maxmin_curvatures(curves, m)
 	return curmax, icurmax, curmin, icurmin
 end
 
+#--- Modes
+
+function _node(i, j, igrad, m)
+	index = CartesianIndex((i, j)...)
+	imove = igrad[index]
+	if (imove == m.imove0)
+		return index
+	else
+		index = [i, j] + m.moves[imove]
+		return _node(index[1], index[2], igrad, m)
+	end
+end
+
+function _nodes(contents, igrad, m)
+
+	cells = findall(x -> x.>0, contents)
+	nodes = [_node(cell[1], cell[2], igrad, m) for cell in cells]
+	unodes = unique(nodes)
+	inodes = Dict()
+	for (i, node) in enumerate(unodes)
+		inodes[node] = i
+	end
+	
+	xnodes = Int.(0 .* deepcopy(contents))
+	for (k, cell) in enumerate(cells)
+		xnodes[cell] = inodes[nodes[k]]
+	end
+	
+	return xnodes
+end
+
+function _neighbour_node(coors, nodes, edges, steps, m)
+	
+	xstep, ystep   = steps
+	xx, yy         = coors
+	xedges, yedges = edges
+	
+	his      = [fit(Histogram, (vec(xx) .- mx * xstep, vec(yy) .- my * ystep), weights(vec(nodes)), (xedges, yedges)) for (mx, my) in m.moves]
+	contents = deepcopy(his[m.imove0].weights)
+	mask     = contents .> 0
+	borders  = [(h.weights .>0) .* (h.weights .!= contents) for h in his] 
+	nborders = reduce(.+, borders) .* mask
+		
+	return nborders, [h.weights for h in his]
+end
+
 #--- Public
 	
 function mesh(edges)
@@ -257,7 +305,7 @@ function quiver(idir, m, steps)
 	return us, vs
 end
 	
-function jclouds(coors, energy, steps)
+function kkclouds(coors, energy, steps)
 	
 	ndim  = length(coors)
 	nsize = length(coors[1])
@@ -297,13 +345,21 @@ function jclouds(coors, energy, steps)
 
 	xs, ys = mesh(edges)
 	
-	return (edges = (xedges, yedges), 
+	# nodes
+	xnodes = _nodes(contents, igrad, m)
+	xborders, xneigh = _neighbour_node((xs, ys), xnodes, edges, steps, m)
+	#nborders, neighbour_node = _neighbour_node(coors, xnodes, edges, steps, m)
+	
+	# output
+	return (edges = (xedges, yedges),
 		    x = xs, y = ys, contents = contents,
 			grad = grad, igrad = igrad,
 			lap = lap, curves = curves,
 			curmax = curmax, icurmax = icurmax,
-		    curmin = curmin, icurmin = icurmin)
-	
+		    curmin = curmin, icurmin = icurmin,
+			nodes  = xnodes,
+			nborders = xborders, neighbour_node = xneigh)
+
 end
 	
 end #begin
@@ -314,8 +370,16 @@ begin
 	coors_   = (data.x, data.y)
 	weights_ = data.weights
 	mm       = _moves2d()
-	cl       = jclouds(coors_, weights_, steps_)
-end
+	cl       = kkclouds(coors_, weights_, steps_)
+end;
+
+# ╔═╡ 7e1adeb7-2714-4205-b895-62cbe0477008
+keys(cl)
+
+# ╔═╡ 7856646f-20f1-47b1-986b-0702e2f53305
+md"""
+### Dev from here
+"""
 
 # ╔═╡ bd1711b7-b6c3-4a97-a54e-a7c1e268ef92
 cl.edges
@@ -387,24 +451,66 @@ begin
 	#quiver!(vec(cl.x), vec(cl.y), quiver = quiver(cl.icurmin, mm, steps_))
 end
 
-# ╔═╡ 97d099cc-666b-4748-95d3-3646c4092496
-md"""
+# ╔═╡ 654bce47-b51d-4c9a-81b3-b295f4bb055a
+begin
+	histogram2d(vec(cl.x), vec(cl.y), weights = vec(cl.nodes), 
+		bins = cl.edges, alpha = 1., title = "nodes")
+end
 
-**TODO**: 
+# ╔═╡ 503b611f-d2f9-4b94-92c5-0b005505d5bf
+begin
+	histogram2d(vec(cl.x), vec(cl.y), weights = vec(cl.nborders), 
+		bins = cl.edges, alpha = 1., title = "number of borders")
+end
 
-  * Not all directions are needed to compute the curvature!! select only the relevant ones.
-
-  * Convert the curves, grad, max, min curves into tests
-"""
+# ╔═╡ 27f27825-3f01-4c63-a119-4267ef69b11c
+begin
+nhis2 = [histogram2d(vec(cl.x), vec(cl.y), weights = vec(cl.neighbour_node[i]), 
+		bins = cl.edges, title = m) for (i, m) in enumerate(mm.moves)]
+plot(nhis2..., layout = (3, 3))
+end
 
 # ╔═╡ 713862ce-7003-4462-9e7b-d5611c3c96e2
 md"""
 ## Nodes
 
-* Group the cells into nodes
-* Select the border cells
 * Make links between border cells (a cell can have several links!)
 """
+
+# ╔═╡ e5d43a95-fcf1-4385-9e82-df1d2c70582c
+begin
+iinodes = unique(vec(cl.nodes))
+dus     = Dict()
+for iii in iinodes
+	imask = cl.nodes .== iii
+	us = []
+	for neigh in cl.neighbour_node
+		kmask = imask .* (neigh .> 0) .* (neigh .!= iii)
+		ius   = unique(vec(neigh[kmask]))
+		for k in ius
+			if !(k in us)
+				append!(us, k)
+			end
+		end
+	end
+	dus[iii] = us
+end	
+end
+
+# ╔═╡ 6fe5cf6a-f52f-4031-a167-a0ff62e3a8b0
+begin
+dus
+end
+
+# ╔═╡ 31d8e0ad-a809-42bf-9887-0282275e990e
+begin
+	xnodes = _nodes(cl.contents, cl.igrad, mm)
+end
+
+# ╔═╡ 7de72fb6-6c7e-45cc-bdd1-86ac9ea659c7
+begin
+	nborder, nneigh = _neighbour_node((cl.x, cl.y), xnodes, cl.edges, steps_, mm)
+end
 
 # ╔═╡ e23317c1-3fbf-4bf2-b6eb-92772b5f1f77
 begin
@@ -448,7 +554,7 @@ end
 # ╔═╡ d71149a4-52e4-4e90-9294-3cb3e84a7c5a
 begin
 	
-function _node(i, j)
+function _node_old(i, j)
 	index = CartesianIndex((i, j)...)
 	imove = cl.igrad[index]
 	if (imove == mm.imove0)
@@ -469,8 +575,12 @@ print(inode)
 cl.igrad[inode]
 end
 
+# ╔═╡ 929b6776-4f3d-44dc-8407-356532e3f0b9
+
+
 # ╔═╡ 0596337f-a242-4f4a-bfa9-bb23f59dc9a9
 begin
+
 cells = findall(x -> x.>0, cl.contents)
 nodes = [_node(cell[1], cell[2]) for cell in cells]
 unodes = unique(nodes)
@@ -590,6 +700,8 @@ end
 # ╠═26bd9352-81d8-49de-a933-d62f22c462fa
 # ╠═cbf54f5a-1bdc-4473-b825-7d2f75211fc0
 # ╠═441a1b38-7ff8-456c-8511-98f57828b26b
+# ╠═7e1adeb7-2714-4205-b895-62cbe0477008
+# ╠═7856646f-20f1-47b1-986b-0702e2f53305
 # ╠═bd1711b7-b6c3-4a97-a54e-a7c1e268ef92
 # ╠═b774e74d-0843-4f5c-98b9-9103bd0a5657
 # ╠═a684c917-3750-4d80-a86e-7cc3fd7b9d02
@@ -601,8 +713,14 @@ end
 # ╠═62d11578-0d90-472d-8898-83e21c53d621
 # ╠═1605c6b4-f674-4209-ae46-f7ac4813693d
 # ╠═f4155f75-af7f-4b79-b846-3bdc601d8767
-# ╠═97d099cc-666b-4748-95d3-3646c4092496
+# ╠═654bce47-b51d-4c9a-81b3-b295f4bb055a
+# ╠═503b611f-d2f9-4b94-92c5-0b005505d5bf
+# ╠═27f27825-3f01-4c63-a119-4267ef69b11c
 # ╠═713862ce-7003-4462-9e7b-d5611c3c96e2
+# ╠═e5d43a95-fcf1-4385-9e82-df1d2c70582c
+# ╠═6fe5cf6a-f52f-4031-a167-a0ff62e3a8b0
+# ╠═31d8e0ad-a809-42bf-9887-0282275e990e
+# ╠═7de72fb6-6c7e-45cc-bdd1-86ac9ea659c7
 # ╠═e23317c1-3fbf-4bf2-b6eb-92772b5f1f77
 # ╠═8284c268-8c3a-4d31-80eb-1cd57ce1c705
 # ╠═0353b898-3bd0-4ad2-91c1-5194fc0e5ebd
@@ -611,6 +729,7 @@ end
 # ╠═66508250-932e-4731-8b67-35a36f3a42b1
 # ╠═d71149a4-52e4-4e90-9294-3cb3e84a7c5a
 # ╠═831ee5f0-e2ce-43b7-bafd-a0b0a824de6f
+# ╠═929b6776-4f3d-44dc-8407-356532e3f0b9
 # ╠═0596337f-a242-4f4a-bfa9-bb23f59dc9a9
 # ╠═a002f20e-d06c-448a-b1db-6d2398bf0be4
 # ╠═d075c6f3-cb7e-44a2-bd5c-0e6588092e5c
