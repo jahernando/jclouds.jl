@@ -21,6 +21,8 @@ using PlutoUI
 using Random
 using Base
 using Distributions
+import Graphs  as GG
+import GraphPlot as GP 
 end
 
 # ╔═╡ 1751666d-d26f-4d8e-b5d6-b36854dd7462
@@ -95,10 +97,10 @@ end
 zz
 
 # ╔═╡ b7fb1cb1-941f-4bfa-ad96-7addfd1e60c0
-hh = fit(Histogram, (vec(xm), vec(ym)), weights(vec(zz)), (xbins, ybins))
+img = fit(Histogram, (vec(xm), vec(ym)), weights(vec(zz)), (xbins, ybins))
 
 # ╔═╡ 5cc3372f-f9df-4063-9e4c-dfa4e43f316c
-plot(hh)
+plot(img)
 
 # ╔═╡ 8f49762d-9e98-4fed-b55c-17d9425d0fff
 histogram2d(vec(xm), vec(ym), weights = vec(zz), nbins = (xbins, ybins))
@@ -115,7 +117,7 @@ end
 
 
 # ╔═╡ b06f35cd-368a-4eec-b21d-68f70afe59fa
-data = histo_to_data(hh)
+data = histo_to_data(img)
 
 # ╔═╡ 62867032-c903-4b5b-b6db-51c02ddc6e6d
 histogram2d(data.x, data.y, weights = data.weights, bins = (xbins, ybins))
@@ -378,7 +380,7 @@ keys(cl)
 
 # ╔═╡ 7856646f-20f1-47b1-986b-0702e2f53305
 md"""
-### Dev from here
+### Control Histograms
 """
 
 # ╔═╡ bd1711b7-b6c3-4a97-a54e-a7c1e268ef92
@@ -472,208 +474,54 @@ end
 
 # ╔═╡ 713862ce-7003-4462-9e7b-d5611c3c96e2
 md"""
-## Nodes
+## Graph
 
-* Make links between border cells (a cell can have several links!)
 """
 
 # ╔═╡ e5d43a95-fcf1-4385-9e82-df1d2c70582c
 begin
-iinodes = unique(vec(cl.nodes))
-dus     = Dict()
-for iii in iinodes
-	imask = cl.nodes .== iii
-	us = []
-	for neigh in cl.neighbour_node
-		kmask = imask .* (neigh .> 0) .* (neigh .!= iii)
-		ius   = unique(vec(neigh[kmask]))
-		for k in ius
-			if !(k in us)
-				append!(us, k)
+function _edges(nodes, neighs)
+	iinodes = sort(unique(vec(nodes[nodes .>0])))
+	dus     = Dict()
+	#edges   = zeros(Bool, nnodes, nnodes)
+	for iii in iinodes
+		imask = cl.nodes .== iii
+		us = []
+		for neigh in neighs
+			kmask = imask .* (neigh .> 0) .* (neigh .!= iii)
+			ius   = unique(vec(neigh[kmask]))
+			for k in ius
+				if !(k in us)
+					append!(us, k)
+				end
 			end
 		end
+		dus[iii] = us
+		#for ui in us
+		#	edges[iii, ui] = true
+		#end
 	end
-	dus[iii] = us
-end	
+	return dus#, edges
 end
 
-# ╔═╡ 6fe5cf6a-f52f-4031-a167-a0ff62e3a8b0
-begin
-dus
-end
+function cloud_graph(nodes, neighs)
+	dus = _edges(nodes, neighs)
 
-# ╔═╡ 31d8e0ad-a809-42bf-9887-0282275e990e
-begin
-	xnodes = _nodes(cl.contents, cl.igrad, mm)
-end
-
-# ╔═╡ 7de72fb6-6c7e-45cc-bdd1-86ac9ea659c7
-begin
-	nborder, nneigh = _neighbour_node((cl.x, cl.y), xnodes, cl.edges, steps_, mm)
-end
-
-# ╔═╡ e23317c1-3fbf-4bf2-b6eb-92772b5f1f77
-begin
-xstep, ystep = steps_
-ipos = Int.((cl.x .+ 1.5 * xstep) ./ xstep)
-jpos = Int.((cl.y .+ 1.5 * ystep) ./ ystep)
-id   = ipos + 100* jpos
-end
-#histogram2d(vec(cl.x), vec(cl.y), weights = ())
-
-# ╔═╡ 8284c268-8c3a-4d31-80eb-1cd57ce1c705
-begin
-nodemask = cl.igrad .== mm.imove0
-mask     = cl.contents .> 0.0
-umask    = mask .* nodemask
-nnodes   = sum(umask)
-print("number of nodes = ", nnodes)
-histogram2d(vec(cl.x), vec(cl.y), weights = vec(umask), bins = cl.edges)
-end
-
-# ╔═╡ 0353b898-3bd0-4ad2-91c1-5194fc0e5ebd
-begin
-#indices = findall(x-> x== true, umask)
-indices_ = findall(umask)
-end
-
-# ╔═╡ deba60d5-8007-432e-987e-5f28ab8d5a23
-cl.contents[indices_[1]]
-
-# ╔═╡ c02db3b7-d4ff-482f-be1e-20a69e6c656c
-
-
-# ╔═╡ 66508250-932e-4731-8b67-35a36f3a42b1
-begin
-	function _path(index::CartesianIndex{2})
-		imove = cl.igrad[index]
-		Cartesian(index + mm.move[imove])
+	nnodes = Base.size(unique(vec(cl.nodes)))[1] -1
+	g = GG.Graph(nnodes)
+	for inode in keys(dus)
+		for knode in dus[inode]
+			GG.add_edge!(g, inode, knode)
+		end
 	end
+	return g
 end
+end # begin
 
-# ╔═╡ d71149a4-52e4-4e90-9294-3cb3e84a7c5a
+# ╔═╡ ebd477fb-fef6-4ad9-8a25-c452172efa69
 begin
-	
-function _node_old(i, j)
-	index = CartesianIndex((i, j)...)
-	imove = cl.igrad[index]
-	if (imove == mm.imove0)
-		return index
-	else
-		index = [i, j] + mm.moves[imove]
-		return _node(index...)
-	end
-end
-	
-end
-
-# ╔═╡ 831ee5f0-e2ce-43b7-bafd-a0b0a824de6f
-begin
-i, j = 15, 6
-inode = _node(i, j)
-print(inode)
-cl.igrad[inode]
-end
-
-# ╔═╡ 929b6776-4f3d-44dc-8407-356532e3f0b9
-
-
-# ╔═╡ 0596337f-a242-4f4a-bfa9-bb23f59dc9a9
-begin
-
-cells = findall(x -> x.>0, cl.contents)
-nodes = [_node(cell[1], cell[2]) for cell in cells]
-unodes = unique(nodes)
-inodes = Dict()
-for (i, node) in enumerate(unodes)
-	inodes[node] = i
-end
-end
-
-# ╔═╡ a002f20e-d06c-448a-b1db-6d2398bf0be4
-inodes
-
-# ╔═╡ d075c6f3-cb7e-44a2-bd5c-0e6588092e5c
-begin
-clnodes = Int.(0 .* deepcopy(cl.contents))
-for (k, cell) in enumerate(cells)
-	clnodes[cell] = inodes[nodes[k]]
-end
-end
-
-# ╔═╡ 5e929652-7b88-4d4f-997a-2927823e2089
-clnodes
-
-# ╔═╡ 0f2ed5f5-b93d-4c2f-9c1f-8757cf5309c2
-histogram2d(vec(cl.x), vec(cl.y), weights = vec(clnodes), bins = cl.edges)
-
-# ╔═╡ 012a7509-c783-4a27-a3f1-e1901080f2b3
-ii, jj = cells[1][1], cells[1][2]
-
-# ╔═╡ 61b326e6-8e27-45e1-b980-61034c314654
-unique(nodes)
-
-# ╔═╡ 0fee2fb8-fdec-4479-9993-22e3071872ac
-md"""
-*next steps*
-
-* associate to each cartesianindex the cartesianindex of the node cell.
-* image with node number
-"""
-
-# ╔═╡ 99ea735c-26d2-4461-a910-33a0161e6f8d
-function _neighbours(coors, nodes, edges, steps, m)
-	
-	xstep, ystep   = steps
-	xx, yy         = coors
-	xedges, yedges = edges
-	
-	his      = [fit(Histogram, (vec(xx) .- mx * xstep, vec(yy) .- my * ystep), weights(vec(nodes)), (xedges, yedges)) for (mx, my) in m.moves]
-	contents = deepcopy(his[m.imove0].weights)
-	mask     = contents .> 0
-	borders  = [(h.weights .>0) .* (h.weights .!= contents) for h in his] 
-	isborder = reduce(.+, borders) .* mask
-		
-	return isborder, [h.weights for h in his]
-end
-
-
-# ╔═╡ 84256c52-046d-4c2a-9358-21564e12df88
-clnodes
-
-# ╔═╡ 3e341066-3bd7-4ccf-9702-3e04a05182fc
-nborders, borders = _neighbours((cl.x, cl.y), clnodes, cl.edges, steps_, mm)
-
-# ╔═╡ ad44b4a5-4a50-4d1d-a560-f9e6a66a34c1
-histogram2d(vec(cl.x), vec(cl.y), weights = vec(nborders), bins = cl.edges)
-
-# ╔═╡ 0a0511a6-7eac-40a0-b7a1-5062e3e6e222
-begin
-	function _nodes_table()
-end
-
-# ╔═╡ 7a0241d7-32fb-4ed1-a958-e251c5435363
-begin
-	xxx = [true, true, false]
-	yyy = [false, true, false]
-	zzz = reduce(.*, (xxx, yyy))
-end
-
-# ╔═╡ a07f8060-6502-49ff-9652-1826926e498f
-_path(CartesianIndex(1, 1))
-
-# ╔═╡ e12fb4a4-f24e-43db-9d12-deebc6f2b0ba
-moves[4]
-
-# ╔═╡ 3b5730e5-145c-4fed-99b0-2e1da1982f68
-moves[1], moves[2]
-
-# ╔═╡ b5c836bb-0155-41bd-88a7-70e62f2fcd3a
-moves[1]
-
-# ╔═╡ 79ffe25f-a9d5-4097-8548-fa588a25e09f
-for (i, move) in enumerate(moves)
-	println(move, ", ", i, "\n ")
+gg = cloud_graph(cl.nodes, cl.neighbour_node)
+GP.gplot(gg, nodelabel=1:GG.nv(gg), edgelabel=1:GG.ne(gg))
 end
 
 # ╔═╡ Cell order:
@@ -718,34 +566,4 @@ end
 # ╠═27f27825-3f01-4c63-a119-4267ef69b11c
 # ╠═713862ce-7003-4462-9e7b-d5611c3c96e2
 # ╠═e5d43a95-fcf1-4385-9e82-df1d2c70582c
-# ╠═6fe5cf6a-f52f-4031-a167-a0ff62e3a8b0
-# ╠═31d8e0ad-a809-42bf-9887-0282275e990e
-# ╠═7de72fb6-6c7e-45cc-bdd1-86ac9ea659c7
-# ╠═e23317c1-3fbf-4bf2-b6eb-92772b5f1f77
-# ╠═8284c268-8c3a-4d31-80eb-1cd57ce1c705
-# ╠═0353b898-3bd0-4ad2-91c1-5194fc0e5ebd
-# ╠═deba60d5-8007-432e-987e-5f28ab8d5a23
-# ╠═c02db3b7-d4ff-482f-be1e-20a69e6c656c
-# ╠═66508250-932e-4731-8b67-35a36f3a42b1
-# ╠═d71149a4-52e4-4e90-9294-3cb3e84a7c5a
-# ╠═831ee5f0-e2ce-43b7-bafd-a0b0a824de6f
-# ╠═929b6776-4f3d-44dc-8407-356532e3f0b9
-# ╠═0596337f-a242-4f4a-bfa9-bb23f59dc9a9
-# ╠═a002f20e-d06c-448a-b1db-6d2398bf0be4
-# ╠═d075c6f3-cb7e-44a2-bd5c-0e6588092e5c
-# ╠═5e929652-7b88-4d4f-997a-2927823e2089
-# ╠═0f2ed5f5-b93d-4c2f-9c1f-8757cf5309c2
-# ╠═012a7509-c783-4a27-a3f1-e1901080f2b3
-# ╠═61b326e6-8e27-45e1-b980-61034c314654
-# ╠═0fee2fb8-fdec-4479-9993-22e3071872ac
-# ╠═99ea735c-26d2-4461-a910-33a0161e6f8d
-# ╠═84256c52-046d-4c2a-9358-21564e12df88
-# ╠═3e341066-3bd7-4ccf-9702-3e04a05182fc
-# ╠═ad44b4a5-4a50-4d1d-a560-f9e6a66a34c1
-# ╠═0a0511a6-7eac-40a0-b7a1-5062e3e6e222
-# ╠═7a0241d7-32fb-4ed1-a958-e251c5435363
-# ╠═a07f8060-6502-49ff-9652-1826926e498f
-# ╠═e12fb4a4-f24e-43db-9d12-deebc6f2b0ba
-# ╠═3b5730e5-145c-4fed-99b0-2e1da1982f68
-# ╠═b5c836bb-0155-41bd-88a7-70e62f2fcd3a
-# ╠═79ffe25f-a9d5-4097-8548-fa588a25e09f
+# ╠═ebd477fb-fef6-4ad9-8a25-c452172efa69
