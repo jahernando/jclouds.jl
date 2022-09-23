@@ -5,9 +5,10 @@ using StatsBase
 using LinearAlgebra
 
 export Img, Moves2D
-export cc_braid, cc_moves2d
-export cc_mesh, cc_quiver
-export cc_clouds
+export braid, moves2d
+export mesh, quiver
+export clouds
+export _edges
 
 #-------
 # Imgs
@@ -23,7 +24,7 @@ end
 Create a braid Img (trenza) in 2D
 return imgs: (coors, contents, edges)
 """
-function cc_braid(nn = 10)
+function braid(nn = 10)
 	nn = 10
 	zz = 0:nn-1
 	zz = vcat(zz, reverse(zz))
@@ -62,7 +63,7 @@ struct Moves2D
 	omoves
 end
 
-function _moves2d()
+function moves2d()
 	moves  = [[i, j] for i in -1:1:1 for j in -1:1:1]
 	imove0 = [i for (i, move) in enumerate(moves) if move == [0, 0]][1]
 	dmoves = Dict(1:9 .=> moves)
@@ -76,9 +77,6 @@ function _moves2d()
 	str_moves = Moves2D(moves, imove0, dmoves, omoves)
 end
 
-function cc_moves2d()
-    return _moves2d()
-end
 
 #-------
 #  Clouds
@@ -192,9 +190,31 @@ function _neighbour_node(coors, nodes, edges, steps, m)
     return nborders, [h.weights for h in his]
 end
 
+#--- Edged
+
+function _edges(nodes, neighs)
+	iinodes = sort(unique(vec(nodes[nodes .>0])))
+	dus     = Dict()
+	for iii in iinodes
+		imask = nodes .== iii
+		us = []
+		for neigh in neighs
+			kmask = imask .* (neigh .> 0) .* (neigh .!= iii)
+			ius   = unique(vec(neigh[kmask]))
+			for k in ius
+				if !(k in us)
+					append!(us, k)
+				end
+			end
+		end
+		dus[iii] = us
+	end
+	return dus
+end
+
 #--- Public
 
-function cc_mesh(edges)
+function mesh(edges)
     nx, ny  = length(edges[1])-1, length(edges[2])-1
     centers = [(edge[2:end] + edge[1:end-1])./2 for edge in edges]
     xm = ones(ny)'   .* centers[1]
@@ -203,7 +223,7 @@ function cc_mesh(edges)
 end
 
 
-function cc_quiver(idir, m, steps)
+function quiver(idir, m, steps)
     xstep, ystep = steps
     uus = [m.dmoves[k] for k in vec(idir)]
     us = [xi * 0.8 * xstep for (xi, yi) in uus]
@@ -211,7 +231,7 @@ function cc_quiver(idir, m, steps)
     return us, vs
 end
 
-function cc_clouds(coors, energy, steps)
+function clouds(coors, energy, steps)
 
     ndim  = length(coors)
     nsize = length(coors[1])
@@ -235,7 +255,7 @@ function cc_clouds(coors, energy, steps)
     contents = deepcopy(histo.weights)
 
     # deltas
-    m = _moves2d()
+    m = moves2d()
     his, deltas = _deltas(coors, energy, edges, steps, m)
 
     # gradient
@@ -248,7 +268,7 @@ function cc_clouds(coors, energy, steps)
     # maximum and monimum curvatures
     curmax, icurmax, curmin, icurmin = _maxmin_curvatures(curves, m)
 
-    xs, ys = cc_mesh(edges)
+    xs, ys = mesh(edges)
 
     # nodes
     xnodes = _nodes(contents, igrad, m)
