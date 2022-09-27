@@ -24,7 +24,7 @@ using Markdown
 #using DataFrames
 import StatsBase as SB
 using Plots
-#using LinearAlgebra
+import LinearAlgebra as LA
 #using Statistics
 using PlutoUI
 using Random
@@ -151,7 +151,8 @@ Notthing
 
 # ╔═╡ 6c8bf138-8fec-4c69-b4dd-4284faddeed0
 begin
-img = line(ndim = 3, threshold = 6.)
+nndim = 3
+img = line(ndim = nndim, threshold = 6.)
 #sc2 = scatter3d(idf.x, idf.y, idf.z, marker_z = idf.energy,
 #	markersize = vscale(idf.energy),
 #	markertype = "circle", label = false, alpha = 0.4, c = :inferno,
@@ -167,41 +168,317 @@ end
 length(img.coors[1] )
 
 # ╔═╡ f5674874-b238-4d0b-8df1-4e55e53fa446
-histogram(img.contents, nbins = 100)
+histogram(img.contents, nbins = 100, title = "energy")
 
 # ╔═╡ 009566ce-b9b5-4895-8565-6fb361845484
 begin
 theme(:dark)
-scatter(img.coors..., zcolor = img.contents, alpha = 0.4)
+scatter(img.coors..., zcolor = img.contents, alpha = 0.4, title = "energy")
 end
 
-# ╔═╡ c76ba535-01c2-4403-a605-6164a5b6aa89
-histogram2d(img.coors..., weights = img.contents, nbins = img.edges)
-
-# ╔═╡ 7a0e6e69-9f9b-427c-8077-172fe9c8af7a
-histogram(img.contents, nbins = 100)
-
-# ╔═╡ 58a19a9e-1955-4a0e-8de8-a3e5d00d2340
+# ╔═╡ fdcccc29-bf00-4f5f-aa85-ed86be2d4400
 begin
-ndim = length(img.coors)
-print(ndim)
-#if ndim == 2
-#theme(:dark)
-#sc = scatter(img.coors..., zcolor = img.contents)
-#plot(sc)
-#elseif ndim == 3
-#	sc = scatter3d(img.coors..., marker_z = img.contents,
-#		markersize = vscale(img.contents),
-#		markertype = "circle", label = false, alpha = 0.4, c = :inferno,
-#		xlabel = "x (mm)", ylabel = "y (mm)", zlabel = "z (mm)")
-#end
-end #begin
+if nndim == 2
+	histogram2d(img.coors..., weights = img.contents, nbins = img.edges, title = "energy")
+end
+end
 
-# ╔═╡ 9b96e42d-3c15-4863-b810-de19f2b89ce3
-#sc2 = scatter3d(img.coors..., marker_z = img.contents,
-#	markersize = vscale(img.contents),
-#	markertype = "circle", label = false, alpha = 0.4, c = :inferno,
-#	xlabel = "x (mm)", ylabel = "y (mm)", zlabel = "z (mm)")
+# ╔═╡ 5a1832c1-33ff-45dc-8f47-212179dbe862
+md"""
+
+Clouds 3D code
+
+  * Moves 
+"""
+
+# ╔═╡ 9c413a7e-3cbc-4676-b846-37db33f0c2f0
+begin
+
+struct Moves
+	moves
+	imove0
+	dmoves
+	omoves
+end
+
+function _moves2d()
+	moves  = [[i, j] for i in -1:1:1 for j in -1:1:1]
+	imove0 = [i for (i, move) in enumerate(moves) if move == [0, 0]][1]
+	dmoves = Dict(1:9 .=> moves)
+	omoves = Dict()
+	imoves = deepcopy(moves)
+	imoves = filter(move -> move != imoves[imove0], moves)
+	for i in 1:9
+		omoves[moves[i]] = [imove for imove in imoves
+			if LA.dot(imove, moves[i]) == 0]
+	end
+	smoves = Moves(moves, imove0, dmoves, omoves)
+	return smoves
+end
+
+function _moves3d()
+	moves  = [[i, j, k] for i in -1:1:1 for j in -1:1:1 for k in -1:1:1]
+	nmoves = length(moves)
+	imove0 = [i for (i, move) in enumerate(moves) if move == [0, 0, 0]][1]
+	dmoves = Dict(1:nmoves .=> moves)
+	omoves = Dict()
+	imoves = deepcopy(moves)
+	imoves = filter(move -> move != imoves[imove0], moves)
+	for i in 1:nmoves
+		omoves[moves[i]] = [imove for imove in imoves
+			if LA.dot(imove, moves[i]) == 0]
+	end
+	smoves = Moves(moves, imove0, dmoves, omoves)
+	return smoves
+end
+
+end
+
+# ╔═╡ 1367811b-355c-446d-9d58-d07a71dfdb23
+begin
+
+function _hcoors(ucoors, move)
+	ndim = length(move)
+	z    = ucoors .- move'
+	zt   = Tuple(z[:, i] for i in 1:ndim)
+	return zt
+end
+
+function _deltas(ucoors, energy, edges, steps, m)
+
+    his = [SB.fit(SB.Histogram, _hcoors(ucoors, steps .* move), 
+		SB.weights(energy), edges) for move in m.moves]
+    contents = deepcopy(his[m.imove0].weights)
+    deltas   = [h.weights .- contents for h in his]
+
+    dsteps   = [LA.norm(steps .* move) for move in m.moves]
+    dsteps[m.imove0] = 1.
+    deltas  = [delta ./dstep for (delta, dstep) in zip(deltas, dsteps)]
+
+    return deltas
+end
+
+function _gradient(deltas, m)
+    dims   = Base.size(deltas[m.imove0])
+    d0     = deltas[m.imove0]
+    grad   = deepcopy(d0)
+    igrad  = m.imove0 .* ones(Int, dims...)
+    for (i, di) in enumerate(deltas)
+        imask         = di .> grad
+        grad[imask]  .= di[imask]
+        igrad[imask] .= i
+    end
+    return grad, igrad
+end
+
+
+function _curvatures(deltas, m)
+
+    ddeltas = Dict()
+    for i in 1:length(m.moves)
+        ddeltas[m.moves[i]] = deltas[i]
+    end
+    curvs = Dict()
+    for imove in m.moves
+        curvs[imove] = reduce(.+, [ddeltas[move] for move in m.omoves[imove]])
+    end
+    return curvs
+end
+
+function _maxmin_curvatures(curves, m)
+    nsize = Base.size(curves[m.moves[m.imove0]])
+    curmin  =  1e6 .* ones(nsize...)
+    icurmin = m.imove0 .* ones(Int, nsize...)
+    curmax  = -1e6 .* ones(nsize...)
+    icurmax = m.imove0 .* ones(Int, nsize...)
+    for (i, move) in enumerate(m.moves)
+        dd = curves[move]
+        mask1 = dd .> curmax
+        curmax[mask1] .= dd[mask1]
+        icurmax[mask1] .= i
+        mask2 = dd .< curmin
+        curmin[mask2] .= dd[mask2]
+        icurmin[mask2] .= i
+    end
+    return curmax, icurmax, curmin, icurmin
+end
+
+function _node(cell, igrad, m)
+    imove = igrad[cell]
+    if (imove == m.imove0)
+        return cell
+    else
+        #cindex_ = tuple(cindex) + m.moves[imove]
+		nextcell = Tuple(Tuple(cell) .+ m.moves[imove])
+        return _node(CartesianIndex(nextcell), igrad, m)
+    end
+end
+
+function _nodes(igrad, cells, m)
+
+	cnodes  = [_node(cell, igrad, m) for cell in cells]
+	ucnodes = unique(cnodes)
+	dicnodes = Dict()
+	for (i, cnode) in enumerate(ucnodes)
+    	dicnodes[Tuple(cnode)] = i
+	end
+	nodes = [dicnodes[Tuple(cnode)] for cnode in cnodes]
+	return nodes
+end
+	
+end
+
+# ╔═╡ 23c6a3f5-443f-4199-87c8-68b93e495107
+begin
+	
+function clouds(coors, energy, steps, threshold = 0.)
+
+    ndim  = length(coors)
+    nsize = length(coors[1])
+
+    # assert dimensions
+    for i in 2:ndim
+        @assert(length(coors[i]) == nsize)
+    end
+    @assert(length(energy) == nsize)
+    @assert(length(steps)  == ndim)
+
+    # define the extended edges
+    edges = Tuple(minimum(x) - 1.5*step : step : maximum(x) + 1.5*step for (x, step) in zip(coors, steps))
+
+    # alias
+	moves  = ndim == 2 ? _moves2d() : _moves3d()
+	move0  = moves.moves[moves.imove0]
+	ucoors = reduce(hcat, coors)
+
+    # main histogram
+    histo    = SB.fit(SB.Histogram, _hcoors(ucoors, move0), SB.weights(energy), edges)
+    contents = deepcopy(histo.weights)
+	cells    = findall(x -> x .> threshold, contents)
+
+    # deltas
+    deltas = _deltas(ucoors, energy, edges, steps, moves)
+
+    # gradient
+    grad, igrad = _gradient(deltas, moves)
+
+    # curvatures
+    curves = _curvatures(deltas, moves)
+    lap    = curves[move0]
+
+    # maximum and monimum curvatures
+    curmax, icurmax, curmin, icurmin = _maxmin_curvatures(curves, moves)
+
+    #xs, ys = mesh(edges)
+
+    # nodes
+    xnodes = _nodes(igrad, cells, moves)
+    #xborders, xneigh = _neighbour_node((xs, ys), xnodes, edges, steps, m)
+
+    # output
+    return (edges = edges,  coors = coors, contents = contents[cells],
+			cells = cells,
+            grad = grad[cells], igrad = igrad[cells],
+            lap = lap[cells], curves = curves,
+            curmax = curmax[cells], icurmax = icurmax[cells],
+            curmin = curmin[cells], icurmin = icurmin[cells],
+            nodes  = xnodes)
+            #nborders = xborders, neighbour_node = xneigh)
+
+end
+end # begin
+
+# ╔═╡ f5dbdc6d-6676-4e0c-a70e-a5daafbbd9db
+begin
+steps_ = [edge[2]-edge[1] for edge in img.edges]
+xcl   = clouds(img.coors, img.contents, steps_)
+end;
+
+# ╔═╡ f00b443d-c5db-49cd-8df7-160df7b45f61
+xcl.nodes
+
+# ╔═╡ 13ac9fdf-46d0-4940-80e3-8619f0609108
+md"""
+
+## Plots
+"""
+
+# ╔═╡ 6fdb8681-c4a1-4e00-910c-8680fc65ff63
+histogram(xcl.grad, nbins = 100, title = "gradient")
+
+# ╔═╡ 702a11da-09f4-4159-ba64-cca34a81caa4
+histogram(xcl.igrad, nbins = 50, title = "i-gradient")
+
+# ╔═╡ ea72b2b1-3849-441e-832d-ae27bff5905a
+begin
+theme(:dark)
+scatter(xcl.coors..., zcolor = xcl.grad, alpha = 0.1, title = "gradient")
+end
+
+# ╔═╡ 9311a861-4c21-4772-a2ea-3e9a7e330981
+begin
+if nndim == 2
+	histogram2d(xcl.coors..., weights = xcl.grad, nbins = xcl.edges, title = "gradient")
+end
+end
+
+# ╔═╡ 536dee15-9660-4887-b472-3f64da2a381b
+begin
+theme(:dark)
+scatter(xcl.coors..., zcolor = xcl.igrad, alpha = 0.1, title = "gradient")
+end
+
+# ╔═╡ 327e8996-2bc0-4b85-9b57-e71ad8bc90d0
+begin
+if nndim == 2
+	histogram2d(xcl.coors..., weights = xcl.igrad, nbins = xcl.edges, title = "gradient")
+end
+end
+
+# ╔═╡ a66a215c-9598-47e1-876e-d8b670c2e2e4
+begin
+theme(:dark)
+scatter(xcl.coors..., zcolor = xcl.lap, alpha = 0.1, title = "laplacian")
+end
+
+# ╔═╡ db1c0d58-1f33-4aa3-9be2-f4b0643e62a2
+begin
+if nndim == 2
+	histogram2d(xcl.coors..., weights = xcl.lap, nbins = xcl.edges, title = "laplacian")
+end
+end
+
+# ╔═╡ 60b83c6d-7ff5-4ceb-8a71-b51be8f2c157
+begin
+theme(:dark)
+scatter(xcl.coors..., zcolor = xcl.curmin, alpha = 0.1, title = "cur min")
+end
+
+# ╔═╡ b14bfefe-251d-42ab-ae7e-67f8ca9ad141
+begin
+if nndim == 2
+	histogram2d(xcl.coors..., weights = xcl.curmin, nbins = xcl.edges, title = "laplacian")
+end
+end
+
+# ╔═╡ 68d7c4e9-3b97-45e8-aefc-a038a97616ce
+begin
+theme(:dark)
+scatter(xcl.coors..., zcolor = xcl.curmax, alpha = 0.1, title = "cur min")
+end
+
+# ╔═╡ 3811c9f9-1369-4393-b28d-e6a5c2776e24
+begin
+if nndim == 2
+	histogram2d(xcl.coors..., weights = xcl.curmax, nbins = xcl.edges, title = "laplacian")
+end
+end
+
+# ╔═╡ be2f8a15-6c8f-4e9e-8983-1c04421ab0c7
+begin
+theme(:dark)
+scatter(xcl.coors..., zcolor = xcl.nodes, alpha = 0.1, title = "nodes")
+end
 
 # ╔═╡ 068e9533-1e4a-40be-83db-617a17935b0c
 """
@@ -221,12 +498,6 @@ function vscale(var, emin = 1, emax = 4)
 	return vvar
 end
 
-# ╔═╡ 602c48e9-9ba6-4cb2-b9f9-f9a5ed340622
-img.edges
-
-# ╔═╡ 17d4089d-ed31-4a1a-a49a-669b50b0f7b1
-mesh(img.edges)
-
 # ╔═╡ 654fb60f-2349-4b22-934e-dfb43080f5ec
 begin
 function _mesh3d(x, y, z)
@@ -236,198 +507,6 @@ function _mesh3d(x, y, z)
 	return xv, yv, zv
 end
 end #begin
-
-# ╔═╡ 458280ed-fc18-48e5-844e-f6e21dc1ad19
-mask = img.weights .> 0
-
-# ╔═╡ b26fca8e-6593-496d-9ff2-3ecbeea3f69f
-indices = CartesianIndices(img.weights .> 0)
-
-# ╔═╡ 03aa6f7f-c30f-4ac2-a51f-f559cde10247
-begin
-cells = findall(x -> x.>0, img.weights)
-_xs   = [img.edges[1][cell[1]] for cell in cells]
-end
-
-# ╔═╡ bea99be8-5f32-4e08-bdc9-ef1e8b0746eb
-cell0[1]
-
-# ╔═╡ 8d7d18f8-5c8a-4762-bb07-90d6d84cf07f
-plot(img)
-
-# ╔═╡ bd311cb5-6e59-4958-9755-7468f1faf0fd
-md"""
-
-## Dev
-"""
-
-# ╔═╡ 1d8af6cd-c48b-4cbe-a040-70eb4dfbc0b4
-begin
-histogram2d(vec(img.coors[1]), vec(img.coors[2]), weights = vec(img.contents), nbins = img.edges)
-end
-
-# ╔═╡ 40a8cad8-0a7b-41c5-9807-a5143c30a76b
-begin
-function _random()
-	size = 1000000
-	bins = 10
-	d    = Normal()
-	xbins = -5.:1:5.
-	ybins = 0:0.25:1.
-	ys   = rand(size)
-	xs   = rand(d, size)
-	h    = fit(Histogram, (xs, ys), (xbins, ybins))
-end
-end
-
-# ╔═╡ bc0a9ad4-62f4-4ef9-909a-4a2f68584b6f
-md"""
-
-## Clouds
-
-Cloud creates an internal image using as input the coordinates (x, y) the weights and the steps (xstep, ystep)
-
-It computes the discrete local gradient, it direction, the laplacian and the maximun and minimum curvature and its direction. Only weights > 0 are consider.
-
-It also groups the cells into nodes, and connect the nodes if both have connecting cells.
-
-It returns a NamedTuple with all the previous information.
-
-"""
-
-# ╔═╡ 1cce8566-ad73-4b6c-abb9-47d95c17e412
-begin
-typeof(img)
-end
-
-# ╔═╡ 441a1b38-7ff8-456c-8511-98f57828b26b
-begin
-	steps    = keyimg == :line ? [0.5, 0.5] : [1.0, 1.0]
-	coors    = (vec(img.coors[1]), vec(img.coors[2]))
-	contents = vec(img.contents)
-	mm       = jc.moves2d()
-	cl       = jc.clouds(coors, contents, steps)
-end;
-
-# ╔═╡ 7e1adeb7-2714-4205-b895-62cbe0477008
-keys(cl)
-
-# ╔═╡ 7856646f-20f1-47b1-986b-0702e2f53305
-md"""
-### Control Histograms
-"""
-
-# ╔═╡ bd1711b7-b6c3-4a97-a54e-a7c1e268ef92
-begin
-xs = vec(cl.coors[1])
-ys = vec(cl.coors[2])
-end;
-
-# ╔═╡ b774e74d-0843-4f5c-98b9-9103bd0a5657
-histogram2d(xs, ys, weights = vec(cl.contents),
-		bins = cl.edges, alpha = 0.8, title = "contents")
-
-
-# ╔═╡ a684c917-3750-4d80-a86e-7cc3fd7b9d02
-begin
-	histogram2d(xs, ys, weights = vec(cl.grad),
-		bins = cl.edges, alpha = 0.8, title = "gradient")
-	quiver!(xs, ys, quiver = jc.quiver(cl.igrad, mm, steps))
-end
-
-# ╔═╡ d8d579a5-aa12-4128-b2ff-252d165cd2a6
-begin
-	histogram2d(xs, ys, weights = vec(cl.igrad),
-		bins = cl.edges, alpha = 0.8, title = "gradient direction")
-	#quiver!(vec(cl.x), vec(cl.y), quiver = quiver(cl.igrad, mm, steps_))
-end
-
-# ╔═╡ 1cf114b7-3f8e-4f4c-bdcd-81e0b6ddee74
-histogram2d(xs, ys, weights = vec(cl.lap),
-		bins = cl.edges, alpha = 1., title = "laplacian")
-
-# ╔═╡ 55c5b8d3-9ac5-4ed1-8ec5-95cf74f81e6e
-begin
-chis2 = [histogram2d(xs, ys, weights = vec(cl.curves[m]),
-		bins = cl.edges, title = m) for m in mm.moves]
-plot(chis2..., layout = (3, 3))
-end
-
-# ╔═╡ c7dbc705-c905-4fc8-b1a5-616345d029b8
-begin
-	histogram2d(xs, ys, weights = vec(cl.curmax),
-		bins = cl.edges, alpha = 0.5, title = "curmax")
-	quiver!(xs, ys, quiver = jc.quiver(cl.icurmax, mm, steps_))
-end
-
-# ╔═╡ 62d11578-0d90-472d-8898-83e21c53d621
-begin
-	histogram2d(xs, ys, weights = vec(cl.icurmax),
-		bins = cl.edges, alpha = 0.5, title = "curmax direction")
-	#quiver!(vec(cl.x), vec(cl.y), quiver = quiver(cl.icurmax, mm, steps_))
-end
-
-# ╔═╡ 1605c6b4-f674-4209-ae46-f7ac4813693d
-begin
-	histogram2d(xs, ys, weights = vec(cl.curmin),
-		bins = cl.edges, alpha = 0.5, title = "curmin direction")
-	#quiver!(xs, ys, quiver = jc.quiver(cl.icurmin, mm, steps))
-end
-
-# ╔═╡ f4155f75-af7f-4b79-b846-3bdc601d8767
-begin
-	histogram2d(xs, ys, weights = vec(cl.icurmin),
-		bins = cl.edges, alpha = 0.5, title = "curmin direction")
-	#quiver!(vec(cl.x), vec(cl.y), quiver = quiver(cl.icurmin, mm, steps_))
-end
-
-# ╔═╡ 654bce47-b51d-4c9a-81b3-b295f4bb055a
-begin
-	histogram2d(xs, ys, weights = vec(cl.nodes),
-		bins = cl.edges, alpha = 1., title = "nodes")
-end
-
-# ╔═╡ 503b611f-d2f9-4b94-92c5-0b005505d5bf
-begin
-	histogram2d(xs, ys, weights = vec(cl.nborders),
-		bins = cl.edges, alpha = 1., title = "number of borders")
-end
-
-# ╔═╡ 27f27825-3f01-4c63-a119-4267ef69b11c
-begin
-nhis2 = [histogram2d(xs, ys, weights = vec(cl.neighbour_node[i]),
-		bins = cl.edges, title = m) for (i, m) in enumerate(mm.moves)]
-plot(nhis2..., layout = (3, 3))
-end
-
-# ╔═╡ 713862ce-7003-4462-9e7b-d5611c3c96e2
-md"""
-## Graph
-
-"""
-
-# ╔═╡ e5d43a95-fcf1-4385-9e82-df1d2c70582c
-begin
-
-function cloud_graph(nodes, neighs)
-	dus = jc._edges(nodes, neighs)
-
-	nnodes = Base.size(unique(vec(cl.nodes)))[1] -1
-	g = GG.Graph(nnodes)
-	for inode in keys(dus)
-		for knode in dus[inode]
-			GG.add_edge!(g, inode, knode)
-		end
-	end
-	return g
-end
-end # begin
-
-# ╔═╡ ebd477fb-fef6-4ad9-8a25-c452172efa69
-begin
-gg = cloud_graph(cl.nodes, cl.neighbour_node)
-GP.gplot(gg, nodelabel=1:GG.nv(gg), edgelabel=1:GG.ne(gg))
-end
 
 # ╔═╡ Cell order:
 # ╠═5dcb2929-115e-459c-b98d-43ae7bcabd3a
@@ -444,40 +523,26 @@ end
 # ╠═e2a822e9-10c2-481e-a770-f958f376a674
 # ╠═f5674874-b238-4d0b-8df1-4e55e53fa446
 # ╠═009566ce-b9b5-4895-8565-6fb361845484
-# ╠═c76ba535-01c2-4403-a605-6164a5b6aa89
-# ╠═7a0e6e69-9f9b-427c-8077-172fe9c8af7a
-# ╠═58a19a9e-1955-4a0e-8de8-a3e5d00d2340
-# ╠═9b96e42d-3c15-4863-b810-de19f2b89ce3
+# ╠═fdcccc29-bf00-4f5f-aa85-ed86be2d4400
+# ╠═5a1832c1-33ff-45dc-8f47-212179dbe862
+# ╠═9c413a7e-3cbc-4676-b846-37db33f0c2f0
+# ╠═1367811b-355c-446d-9d58-d07a71dfdb23
+# ╠═23c6a3f5-443f-4199-87c8-68b93e495107
+# ╠═f5dbdc6d-6676-4e0c-a70e-a5daafbbd9db
+# ╠═f00b443d-c5db-49cd-8df7-160df7b45f61
+# ╠═13ac9fdf-46d0-4940-80e3-8619f0609108
+# ╠═6fdb8681-c4a1-4e00-910c-8680fc65ff63
+# ╠═702a11da-09f4-4159-ba64-cca34a81caa4
+# ╠═ea72b2b1-3849-441e-832d-ae27bff5905a
+# ╠═9311a861-4c21-4772-a2ea-3e9a7e330981
+# ╠═536dee15-9660-4887-b472-3f64da2a381b
+# ╠═327e8996-2bc0-4b85-9b57-e71ad8bc90d0
+# ╠═a66a215c-9598-47e1-876e-d8b670c2e2e4
+# ╠═db1c0d58-1f33-4aa3-9be2-f4b0643e62a2
+# ╠═60b83c6d-7ff5-4ceb-8a71-b51be8f2c157
+# ╠═b14bfefe-251d-42ab-ae7e-67f8ca9ad141
+# ╠═68d7c4e9-3b97-45e8-aefc-a038a97616ce
+# ╠═3811c9f9-1369-4393-b28d-e6a5c2776e24
+# ╠═be2f8a15-6c8f-4e9e-8983-1c04421ab0c7
 # ╠═068e9533-1e4a-40be-83db-617a17935b0c
-# ╠═602c48e9-9ba6-4cb2-b9f9-f9a5ed340622
-# ╠═17d4089d-ed31-4a1a-a49a-669b50b0f7b1
 # ╠═654fb60f-2349-4b22-934e-dfb43080f5ec
-# ╠═458280ed-fc18-48e5-844e-f6e21dc1ad19
-# ╠═b26fca8e-6593-496d-9ff2-3ecbeea3f69f
-# ╠═03aa6f7f-c30f-4ac2-a51f-f559cde10247
-# ╠═bea99be8-5f32-4e08-bdc9-ef1e8b0746eb
-# ╠═8d7d18f8-5c8a-4762-bb07-90d6d84cf07f
-# ╠═bd311cb5-6e59-4958-9755-7468f1faf0fd
-# ╠═1d8af6cd-c48b-4cbe-a040-70eb4dfbc0b4
-# ╠═40a8cad8-0a7b-41c5-9807-a5143c30a76b
-# ╠═bc0a9ad4-62f4-4ef9-909a-4a2f68584b6f
-# ╠═1cce8566-ad73-4b6c-abb9-47d95c17e412
-# ╠═441a1b38-7ff8-456c-8511-98f57828b26b
-# ╠═7e1adeb7-2714-4205-b895-62cbe0477008
-# ╠═7856646f-20f1-47b1-986b-0702e2f53305
-# ╠═bd1711b7-b6c3-4a97-a54e-a7c1e268ef92
-# ╠═b774e74d-0843-4f5c-98b9-9103bd0a5657
-# ╠═a684c917-3750-4d80-a86e-7cc3fd7b9d02
-# ╠═d8d579a5-aa12-4128-b2ff-252d165cd2a6
-# ╠═1cf114b7-3f8e-4f4c-bdcd-81e0b6ddee74
-# ╠═55c5b8d3-9ac5-4ed1-8ec5-95cf74f81e6e
-# ╠═c7dbc705-c905-4fc8-b1a5-616345d029b8
-# ╠═62d11578-0d90-472d-8898-83e21c53d621
-# ╠═1605c6b4-f674-4209-ae46-f7ac4813693d
-# ╠═f4155f75-af7f-4b79-b846-3bdc601d8767
-# ╠═654bce47-b51d-4c9a-81b3-b295f4bb055a
-# ╠═503b611f-d2f9-4b94-92c5-0b005505d5bf
-# ╠═27f27825-3f01-4c63-a119-4267ef69b11c
-# ╠═713862ce-7003-4462-9e7b-d5611c3c96e2
-# ╠═e5d43a95-fcf1-4385-9e82-df1d2c70582c
-# ╠═ebd477fb-fef6-4ad9-8a25-c452172efa69
