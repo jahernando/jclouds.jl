@@ -77,17 +77,18 @@ Just a smeared line!
 """
 function line(; ndim = 3, threshold = 0.)
 
-	sigma = 0.1
-	ts = 0:0.05:1.
-	ax, bx, cx = 1., 0., 0.
-	ay, by, cy = -1., -5., 0.
-	az, bz, cz = 0.5, -1., 0.
+	tstep = 0.1
+	ts = 0:tstep:1.
+	ax, bx, cx = 5., 0., 1.
+	ay, by, cy = -5., -5., -1.
+	az, bz, cz = 1., -1., 0.
 	xx = cx .* ts .* ts + ax .* ts .+ bx
 	yy = cy .* ts .* ts + ay .* ts .+ by
 	zz = cz .* ts .* ts + az .* ts .+ bz
 
 
-	zsig   = 6
+	zsig  = 5.
+	sigma = 2 * tstep #* ma(ax, ay, az)
 	xxbins = minimum(xx) - zsig .* sigma : sigma : maximum(xx) + zsig .*sigma
 	yybins = minimum(yy) - zsig .* sigma : sigma : maximum(yy) + zsig .*sigma
 	zzbins = minimum(zz) - zsig .* sigma : sigma : maximum(zz) + zsig .*sigma
@@ -101,7 +102,7 @@ function line(; ndim = 3, threshold = 0.)
 
 	centers = [(edge[2:end] + edge[1:end-1])./2 for edge in edges]
 
-	factor = 10.0
+	factor = 10.
 	sigma_kernel = (sigma * factor) .* ones(ndim)
 	weights_ = IF.imfilter(hh.weights, IF.Kernel.gaussian(sigma_kernel))
 
@@ -113,16 +114,7 @@ function line(; ndim = 3, threshold = 0.)
 
 	return (coors = coors, cells = cells, contents = contents, edges = edges)
 
-	#img0 = jc.histo_to_img(h2)
-	#sigma_kernel = 2 .* ones(ndin)
-	#contents = IF.imfilter(hh.weights, IF.Kernel.gaussian(sigma_kernel))
-
-	#h0 = SB.zero(hh)
-
-	return hh
-	#img = jc.Img(img0.coors, contents, img0.edges)
 end
-
 
 end # begin
 
@@ -143,50 +135,27 @@ Selecting line
 end
 
 # ╔═╡ e8848fd9-205e-4b56-b192-62f1acda8d7e
+begin
+bndim = @bind nndim Select([2, 3])
+	
+#blabel = @bind typeevt Select(coll(:contents, :grad, :lap, :curmin, :curmax, :nodes, :nbordes))
+	
 md"""
 
-Notthing
+Select label to plot $(bndim)
 
 """
+end
 
 # ╔═╡ 6c8bf138-8fec-4c69-b4dd-4284faddeed0
 begin
-nndim = 3
 img = line(ndim = nndim, threshold = 6.)
-#sc2 = scatter3d(idf.x, idf.y, idf.z, marker_z = idf.energy,
-#	markersize = vscale(idf.energy),
-#	markertype = "circle", label = false, alpha = 0.4, c = :inferno,
-#	xlabel = "x (mm)", ylabel = "y (mm)", zlabel = "z (mm)")
-#scatter3d!(imc.x, imc.y, imc.z, color = "white", alpha = 0.4, markersize = 0.5)
-#plot(sc2, size = (700, 600))
-
-#plot(img)
-#typeof(img)
-end
-
-# ╔═╡ e2a822e9-10c2-481e-a770-f958f376a674
-length(img.coors[1] )
-
-# ╔═╡ f5674874-b238-4d0b-8df1-4e55e53fa446
-histogram(img.contents, nbins = 100, title = "energy")
-
-# ╔═╡ 009566ce-b9b5-4895-8565-6fb361845484
-begin
-theme(:dark)
-scatter(img.coors..., zcolor = img.contents, alpha = 0.4, title = "energy")
-end
-
-# ╔═╡ fdcccc29-bf00-4f5f-aa85-ed86be2d4400
-begin
-if nndim == 2
-	histogram2d(img.coors..., weights = img.contents, nbins = img.edges, title = "energy")
-end
-end
+end;
 
 # ╔═╡ 5a1832c1-33ff-45dc-8f47-212179dbe862
 md"""
 
-Clouds 3D code
+## Clouds code
 
   * Moves 
 """
@@ -325,7 +294,43 @@ function _nodes(igrad, cells, m)
 	nodes = [dicnodes[Tuple(cnode)] for cnode in cnodes]
 	return nodes
 end
+
+function _neighbour_node(ucoors, nodes, edges, steps, m)
 	
+    his = [SB.fit(SB.Histogram, _hcoors(ucoors, steps .* move), 
+		SB.weights(nodes), edges) for move in m.moves]
+	
+    contents = deepcopy(his[m.imove0].weights)
+    mask     = contents .> 0
+    borders  = [(h.weights .>0) .* (h.weights .!= contents) for h in his]
+    nborders = reduce(.+, borders) .* mask
+
+    return nborders, [h.weights for h in his]
+end
+
+
+function _links(nodes, neighs)
+
+	imove0 = length(neighs) > 9 ? 14 : 5 
+	
+	dus     = Dict()
+	for inode in nodes
+		imask = neighs[imove0] .== inode
+		us = []
+		for neigh in neighs
+			kmask = imask .* (neigh .> 0) .* (neigh .!= inode)
+			ius   = unique(vec(neigh[kmask]))
+			for k in ius
+				if !(k in us)
+					append!(us, k)
+				end
+			end
+		end
+		dus[inode] = us
+	end
+	return dus
+end
+
 end
 
 # ╔═╡ 23c6a3f5-443f-4199-87c8-68b93e495107
@@ -373,8 +378,10 @@ function clouds(coors, energy, steps, threshold = 0.)
 
     # nodes
     xnodes = _nodes(igrad, cells, moves)
-    #xborders, xneigh = _neighbour_node((xs, ys), xnodes, edges, steps, m)
+    xborders, xneigh = _neighbour_node(ucoors, xnodes, edges, steps, moves)
 
+	#xlinks = _links(xnodes, xneigh)
+	
     # output
     return (edges = edges,  coors = coors, contents = contents[cells],
 			cells = cells,
@@ -382,11 +389,15 @@ function clouds(coors, energy, steps, threshold = 0.)
             lap = lap[cells], curves = curves,
             curmax = curmax[cells], icurmax = icurmax[cells],
             curmin = curmin[cells], icurmin = icurmin[cells],
-            nodes  = xnodes)
-            #nborders = xborders, neighbour_node = xneigh)
+            nodes  = xnodes,
+            nborders = xborders[cells], neighbour_node = xneigh)
+#			links = xlinks)
 
 end
 end # begin
+
+# ╔═╡ d2c45f38-8cbe-474e-b66a-e45cfaf72f50
+md"""
 
 # ╔═╡ f5dbdc6d-6676-4e0c-a70e-a5daafbbd9db
 begin
@@ -394,90 +405,64 @@ steps_ = [edge[2]-edge[1] for edge in img.edges]
 xcl   = clouds(img.coors, img.contents, steps_)
 end;
 
-# ╔═╡ f00b443d-c5db-49cd-8df7-160df7b45f61
-xcl.nodes
-
 # ╔═╡ 13ac9fdf-46d0-4940-80e3-8619f0609108
 md"""
 
 ## Plots
 """
 
-# ╔═╡ 6fdb8681-c4a1-4e00-910c-8680fc65ff63
-histogram(xcl.grad, nbins = 100, title = "gradient")
-
-# ╔═╡ 702a11da-09f4-4159-ba64-cca34a81caa4
-histogram(xcl.igrad, nbins = 50, title = "i-gradient")
-
-# ╔═╡ ea72b2b1-3849-441e-832d-ae27bff5905a
+# ╔═╡ a689debb-8763-45c4-a03d-94c8e970b243
 begin
-theme(:dark)
-scatter(xcl.coors..., zcolor = xcl.grad, alpha = 0.1, title = "gradient")
+
+blabel = @bind label Select([:contents, :grad, :igrad, :lap, :curmax, :icurmax, :curmin, :icurmin, :nodes, :nborders])
+	
+#blabel = @bind typeevt Select(coll(:contents, :grad, :lap, :curmin, :curmax, :nodes, :nbordes))
+	
+md"""
+
+Select label to plot $(blabel)
+
+"""
 end
 
-# ╔═╡ 9311a861-4c21-4772-a2ea-3e9a7e330981
+# ╔═╡ dfa64554-5fb1-4d63-80d3-19aee7a476b8
 begin
-if nndim == 2
-	histogram2d(xcl.coors..., weights = xcl.grad, nbins = xcl.edges, title = "gradient")
-end
-end
-
-# ╔═╡ 536dee15-9660-4887-b472-3f64da2a381b
-begin
-theme(:dark)
-scatter(xcl.coors..., zcolor = xcl.igrad, alpha = 0.1, title = "gradient")
-end
-
-# ╔═╡ 327e8996-2bc0-4b85-9b57-e71ad8bc90d0
-begin
-if nndim == 2
-	histogram2d(xcl.coors..., weights = xcl.igrad, nbins = xcl.edges, title = "gradient")
-end
-end
-
-# ╔═╡ a66a215c-9598-47e1-876e-d8b670c2e2e4
-begin
-theme(:dark)
-scatter(xcl.coors..., zcolor = xcl.lap, alpha = 0.1, title = "laplacian")
-end
-
-# ╔═╡ db1c0d58-1f33-4aa3-9be2-f4b0643e62a2
-begin
-if nndim == 2
-	histogram2d(xcl.coors..., weights = xcl.lap, nbins = xcl.edges, title = "laplacian")
+function cplot(cl, label, title)
+	ndim = length(cl.coors)
+	vals = getfield(cl, label)
+	p1 = ndim == 2 ? histogram2d(cl.coors..., weights = vals, nbins = cl.edges) : p1 = scatter(cl.coors..., zcolor = vals, alpha = 0.1)
+	p2 = histogram(vals, nbins = 100)
+	plot(p1, p2, title = title)
 end
 end
 
-# ╔═╡ 60b83c6d-7ff5-4ceb-8a71-b51be8f2c157
-begin
-theme(:dark)
-scatter(xcl.coors..., zcolor = xcl.curmin, alpha = 0.1, title = "cur min")
-end
+# ╔═╡ fe2513f9-461c-4066-9e30-6c55540ccd4b
+cplot(img, :contents, :contents)
 
-# ╔═╡ b14bfefe-251d-42ab-ae7e-67f8ca9ad141
-begin
-if nndim == 2
-	histogram2d(xcl.coors..., weights = xcl.curmin, nbins = xcl.edges, title = "laplacian")
-end
-end
+# ╔═╡ 1fab453f-5dab-48bb-87d2-1c92b3f6d7cc
+cplot(xcl, label, label)
 
-# ╔═╡ 68d7c4e9-3b97-45e8-aefc-a038a97616ce
+# ╔═╡ 16b988b0-887f-4672-b347-9c374fcc3fae
 begin
-theme(:dark)
-scatter(xcl.coors..., zcolor = xcl.curmax, alpha = 0.1, title = "cur min")
-end
 
-# ╔═╡ 3811c9f9-1369-4393-b28d-e6a5c2776e24
-begin
-if nndim == 2
-	histogram2d(xcl.coors..., weights = xcl.curmax, nbins = xcl.edges, title = "laplacian")
-end
-end
+function cloud_graph(nodes, neighs)
+	dus = _links(nodes, neighs)
 
-# ╔═╡ be2f8a15-6c8f-4e9e-8983-1c04421ab0c7
+	nnodes = length(unique(nodes))
+	g = GG.Graph(nnodes)
+	for inode in keys(dus)
+		for knode in dus[inode]
+			GG.add_edge!(g, inode, knode)
+		end
+	end
+	return g
+end
+end # begin
+
+# ╔═╡ 1c402508-afd3-46a1-8dbc-a23fd9bd63e1
 begin
-theme(:dark)
-scatter(xcl.coors..., zcolor = xcl.nodes, alpha = 0.1, title = "nodes")
+gg = cloud_graph(xcl.nodes, xcl.neighbour_node)
+GP.gplot(gg, nodelabel=1:GG.nv(gg), edgelabel=1:GG.ne(gg))
 end
 
 # ╔═╡ 068e9533-1e4a-40be-83db-617a17935b0c
@@ -520,29 +505,18 @@ end #begin
 # ╠═2be6a8f8-74f2-49d3-95b1-6add8103c310
 # ╠═e8848fd9-205e-4b56-b192-62f1acda8d7e
 # ╠═6c8bf138-8fec-4c69-b4dd-4284faddeed0
-# ╠═e2a822e9-10c2-481e-a770-f958f376a674
-# ╠═f5674874-b238-4d0b-8df1-4e55e53fa446
-# ╠═009566ce-b9b5-4895-8565-6fb361845484
-# ╠═fdcccc29-bf00-4f5f-aa85-ed86be2d4400
+# ╠═fe2513f9-461c-4066-9e30-6c55540ccd4b
 # ╠═5a1832c1-33ff-45dc-8f47-212179dbe862
 # ╠═9c413a7e-3cbc-4676-b846-37db33f0c2f0
 # ╠═1367811b-355c-446d-9d58-d07a71dfdb23
 # ╠═23c6a3f5-443f-4199-87c8-68b93e495107
+# ╠═d2c45f38-8cbe-474e-b66a-e45cfaf72f50
 # ╠═f5dbdc6d-6676-4e0c-a70e-a5daafbbd9db
-# ╠═f00b443d-c5db-49cd-8df7-160df7b45f61
 # ╠═13ac9fdf-46d0-4940-80e3-8619f0609108
-# ╠═6fdb8681-c4a1-4e00-910c-8680fc65ff63
-# ╠═702a11da-09f4-4159-ba64-cca34a81caa4
-# ╠═ea72b2b1-3849-441e-832d-ae27bff5905a
-# ╠═9311a861-4c21-4772-a2ea-3e9a7e330981
-# ╠═536dee15-9660-4887-b472-3f64da2a381b
-# ╠═327e8996-2bc0-4b85-9b57-e71ad8bc90d0
-# ╠═a66a215c-9598-47e1-876e-d8b670c2e2e4
-# ╠═db1c0d58-1f33-4aa3-9be2-f4b0643e62a2
-# ╠═60b83c6d-7ff5-4ceb-8a71-b51be8f2c157
-# ╠═b14bfefe-251d-42ab-ae7e-67f8ca9ad141
-# ╠═68d7c4e9-3b97-45e8-aefc-a038a97616ce
-# ╠═3811c9f9-1369-4393-b28d-e6a5c2776e24
-# ╠═be2f8a15-6c8f-4e9e-8983-1c04421ab0c7
+# ╠═a689debb-8763-45c4-a03d-94c8e970b243
+# ╟─dfa64554-5fb1-4d63-80d3-19aee7a476b8
+# ╠═1fab453f-5dab-48bb-87d2-1c92b3f6d7cc
+# ╠═16b988b0-887f-4672-b347-9c374fcc3fae
+# ╠═1c402508-afd3-46a1-8dbc-a23fd9bd63e1
 # ╠═068e9533-1e4a-40be-83db-617a17935b0c
 # ╠═654fb60f-2349-4b22-934e-dfb43080f5ec
