@@ -1,69 +1,26 @@
 module jclouds
 
 using Base
-using StatsBase
-using LinearAlgebra
+import StatsBase as SB
+import LinearAlgebra as LA
 
-export Img, Moves2D
-export braid, moves2d
-export mesh, quiver
-export clouds
-export _edges
 
-#-------
-# Imgs
-#-------
+#export mesh, quiver
+export line, clouds
 
-struct Img
-    coors
-    contents
-    edges
-end
-
-"""
-Create a braid Img (trenza) in 2D
-return imgs: (coors, contents, edges)
-"""
-function braid(nn = 10)
-	nn = 10
-	zz = 0:nn-1
-	zz = vcat(zz, reverse(zz))
-	zz = ones(nn)' .* zz
-	xx = 0.5 .+ 0:2*nn
-	yy = 0.5 .+ 0:nn
-	xm = ones(nn)' .* xx
-	ym = yy'       .* ones(2*nn)
-	xbins = 0:1:2*nn
-	ybins = 0:1:nn
-    return Img((xm, ym), zz, (xbins, ybins))
-	#return (coors = (xm, ym), contents = zz, edges = (xbins, ybins))
-end
-
-"""
-convert a 2D histogram into img
-"""
-function histo_to_img(h::Histogram)
-	nx, ny  = Base.size(h.weights)
-	centers = [(edge[2:end] + edge[1:end-1])./2 for edge in h.edges]
-	xm = ones(ny)'   .* centers[1]
-	ym = centers[2]' .* ones(nx)
-	zz = deepcopy(h.weights)
-	return Img((xm, ym), zz, h.edges)
-end
 
 #-----------
 # Moves
 #-----------
 
-
-struct Moves2D
+struct Moves
 	moves
 	imove0
 	dmoves
 	omoves
 end
 
-function moves2d()
+function _moves2d()
 	moves  = [[i, j] for i in -1:1:1 for j in -1:1:1]
 	imove0 = [i for (i, move) in enumerate(moves) if move == [0, 0]][1]
 	dmoves = Dict(1:9 .=> moves)
@@ -72,38 +29,60 @@ function moves2d()
 	imoves = filter(move -> move != imoves[imove0], moves)
 	for i in 1:9
 		omoves[moves[i]] = [imove for imove in imoves
-			if LinearAlgebra.dot(imove, moves[i]) == 0]
+			if LA.dot(imove, moves[i]) == 0]
 	end
-	str_moves = Moves2D(moves, imove0, dmoves, omoves)
+	smoves = Moves(moves, imove0, dmoves, omoves)
+	return smoves
+end
+
+function _moves3d()
+	moves  = [[i, j, k] for i in -1:1:1 for j in -1:1:1 for k in -1:1:1]
+	nmoves = length(moves)
+	imove0 = [i for (i, move) in enumerate(moves) if move == [0, 0, 0]][1]
+	dmoves = Dict(1:nmoves .=> moves)
+	omoves = Dict()
+	imoves = deepcopy(moves)
+	imoves = filter(move -> move != imoves[imove0], moves)
+	for i in 1:nmoves
+		omoves[moves[i]] = [imove for imove in imoves
+			if LA.dot(imove, moves[i]) == 0]
+	end
+	smoves = Moves(moves, imove0, dmoves, omoves)
+	return smoves
 end
 
 
-#-------
-#  Clouds
-#-------
 
-function _deltas(coors, energy, edges, steps, m)
+#-----------------------------
+#  Clouds internal functions
+#-----------------------------
 
-    xstep, ystep   = steps
-    xx, yy         = coors
-    xedges, yedges = edges
+function _hcoors(ucoors, move)
+	ndim = length(move)
+	z    = ucoors .- move'
+	zt   = Tuple(z[:, i] for i in 1:ndim)
+	return zt
+end
 
-    his      = [fit(Histogram, (xx .- mx * xstep, yy .- my * ystep), weights(energy), (xedges, yedges)) for (mx, my) in m.moves]
+function _deltas(ucoors, energy, edges, steps, m)
+
+    his = [SB.fit(SB.Histogram, _hcoors(ucoors, steps .* move),
+		SB.weights(energy), edges) for move in m.moves]
     contents = deepcopy(his[m.imove0].weights)
     deltas   = [h.weights .- contents for h in his]
 
-    dsteps   = [norm([xstep, ystep] .* move) for move in m.moves]
+    dsteps   = [LA.norm(steps .* move) for move in m.moves]
     dsteps[m.imove0] = 1.
     deltas  = [delta ./dstep for (delta, dstep) in zip(deltas, dsteps)]
 
-    return his, deltas
+    return deltas
 end
 
-function _grad(deltas, m)
-    nx, ny = Base.size(deltas[m.imove0])
+function _gradient(deltas, m)
+    dims   = Base.size(deltas[m.imove0])
     d0     = deltas[m.imove0]
     grad   = deepcopy(d0)
-    igrad  = m.imove0 .* ones(Int, nx, ny)
+    igrad  = m.imove0 .* ones(Int, dims...)
     for (i, di) in enumerate(deltas)
         imask         = di .> grad
         grad[imask]  .= di[imask]
@@ -116,7 +95,7 @@ end
 function _curvatures(deltas, m)
 
     ddeltas = Dict()
-    for i in 1:9
+    for i in 1:length(m.moves)
         ddeltas[m.moves[i]] = deltas[i]
     end
     curvs = Dict()
@@ -127,11 +106,11 @@ function _curvatures(deltas, m)
 end
 
 function _maxmin_curvatures(curves, m)
-    nx, ny = Base.size(curves[m.moves[m.imove0]])
-    curmin  =  1e6 .* ones(nx, ny)
-    icurmin = m.imove0 .* ones(Int, nx, ny)
-    curmax  = -1e6 .* ones(nx, ny)
-    icurmax = m.imove0 .* ones(Int, nx, ny)
+    nsize = Base.size(curves[m.moves[m.imove0]])
+    curmin  =  1e6 .* ones(nsize...)
+    icurmin = m.imove0 .* ones(Int, nsize...)
+    curmax  = -1e6 .* ones(nsize...)
+    icurmax = m.imove0 .* ones(Int, nsize...)
     for (i, move) in enumerate(m.moves)
         dd = curves[move]
         mask1 = dd .> curmax
@@ -144,44 +123,34 @@ function _maxmin_curvatures(curves, m)
     return curmax, icurmax, curmin, icurmin
 end
 
-#--- Nodes
-
-function _node(i, j, igrad, m)
-    index = CartesianIndex((i, j)...)
-    imove = igrad[index]
+function _node(cell, igrad, m)
+    imove = igrad[cell]
     if (imove == m.imove0)
-        return index
+        return cell
     else
-        index = [i, j] + m.moves[imove]
-        return _node(index[1], index[2], igrad, m)
+        #cindex_ = tuple(cindex) + m.moves[imove]
+		nextcell = Tuple(Tuple(cell) .+ m.moves[imove])
+        return _node(CartesianIndex(nextcell), igrad, m)
     end
 end
 
-function _nodes(contents, igrad, m)
+function _nodes(igrad, cells, m)
 
-    cells = findall(x -> x.>0, contents)
-    nodes = [_node(cell[1], cell[2], igrad, m) for cell in cells]
-    unodes = unique(nodes)
-    inodes = Dict()
-    for (i, node) in enumerate(unodes)
-        inodes[node] = i
-    end
-
-    xnodes = Int.(0 .* deepcopy(contents))
-    for (k, cell) in enumerate(cells)
-        xnodes[cell] = inodes[nodes[k]]
-    end
-
-    return xnodes
+	cnodes  = [_node(cell, igrad, m) for cell in cells]
+	ucnodes = unique(cnodes)
+	dicnodes = Dict()
+	for (i, cnode) in enumerate(ucnodes)
+    	dicnodes[Tuple(cnode)] = i
+	end
+	nodes = [dicnodes[Tuple(cnode)] for cnode in cnodes]
+	return nodes
 end
 
-function _neighbour_node(coors, nodes, edges, steps, m)
+function _neighbour_node(ucoors, nodes, edges, steps, m)
 
-    xstep, ystep   = steps
-    xx, yy         = coors
-    xedges, yedges = edges
+    his = [SB.fit(SB.Histogram, _hcoors(ucoors, steps .* move),
+		SB.weights(nodes), edges) for move in m.moves]
 
-    his      = [fit(Histogram, (vec(xx) .- mx * xstep, vec(yy) .- my * ystep), weights(vec(nodes)), (xedges, yedges)) for (mx, my) in m.moves]
     contents = deepcopy(his[m.imove0].weights)
     mask     = contents .> 0
     borders  = [(h.weights .>0) .* (h.weights .!= contents) for h in his]
@@ -190,16 +159,17 @@ function _neighbour_node(coors, nodes, edges, steps, m)
     return nborders, [h.weights for h in his]
 end
 
-#--- Edged
 
-function _edges(nodes, neighs)
-	iinodes = sort(unique(vec(nodes[nodes .>0])))
+function _links(nodes, neighs)
+
+	imove0 = length(neighs) > 9 ? 14 : 5
+
 	dus     = Dict()
-	for iii in iinodes
-		imask = nodes .== iii
+	for inode in nodes
+		imask = neighs[imove0] .== inode
 		us = []
 		for neigh in neighs
-			kmask = imask .* (neigh .> 0) .* (neigh .!= iii)
+			kmask = imask .* (neigh .> 0) .* (neigh .!= inode)
 			ius   = unique(vec(neigh[kmask]))
 			for k in ius
 				if !(k in us)
@@ -207,83 +177,133 @@ function _edges(nodes, neighs)
 				end
 			end
 		end
-		dus[iii] = us
+		dus[inode] = us
 	end
 	return dus
 end
 
-#--- Public
 
-function mesh(edges)
-    nx, ny  = length(edges[1])-1, length(edges[2])-1
-    centers = [(edge[2:end] + edge[1:end-1])./2 for edge in edges]
-    xm = ones(ny)'   .* centers[1]
-    ym = centers[2]' .* ones(nx)
-    return xm, ym
-end
+#------------
+# Clouds
+#------------
 
+"""
 
-function quiver(idir, m, steps)
-    xstep, ystep = steps
-    uus = [m.dmoves[k] for k in vec(idir)]
-    us = [xi * 0.8 * xstep for (xi, yi) in uus]
-    vs = [yi * 0.8 * ystep for (xi, yi) in uus]
-    return us, vs
-end
+Create Clouds
 
-function clouds(coors, energy, steps)
+From a (x, y) or (x, y, z) tuples of points with an energy.
+The space is binned in steps and a histogram is created with the energy.
+Only bins with contents > threshold are considered valid cells.
+
+For each cell several information is provided:
+
+content, gradient, laplacian, minimum and maximum curvature, node number,
+and number of neighbour cells belonging to another node.
+
+A dictionary, nodes_edges, with the edes between the nodes is also provided.
+
+"""
+function clouds(coors, energy, steps, threshold = 0.)
 
     ndim  = length(coors)
     nsize = length(coors[1])
 
     # assert dimensions
     for i in 2:ndim
-        @assert(length(coors[2]) == nsize)
+        @assert(length(coors[i]) == nsize)
     end
     @assert(length(energy) == nsize)
     @assert(length(steps)  == ndim)
 
     # define the extended edges
-    edges = [minimum(x)-1.5*step:step:maximum(x)+1.5*step for (x, step) in zip(coors, steps)]
+    edges = Tuple(minimum(x) - 1.5*step : step : maximum(x) + 1.5*step for (x, step) in zip(coors, steps))
 
     # alias
-    xx, yy         = coors
-    xedges, yedges = edges
+	moves  = ndim == 2 ? _moves2d() : _moves3d()
+	move0  = moves.moves[moves.imove0]
+	ucoors = reduce(hcat, coors)
 
     # main histogram
-    histo    = fit(Histogram, (xx, yy), weights(energy), (xedges, yedges))
+    histo    = SB.fit(SB.Histogram, _hcoors(ucoors, move0), SB.weights(energy), edges)
     contents = deepcopy(histo.weights)
+	cells    = findall(x -> x .> threshold, contents)
 
     # deltas
-    m = moves2d()
-    his, deltas = _deltas(coors, energy, edges, steps, m)
+    deltas = _deltas(ucoors, energy, edges, steps, moves)
 
     # gradient
-    grad, igrad = _grad(deltas, m)
+    grad, igrad = _gradient(deltas, moves)
 
     # curvatures
-    curves = _curvatures(deltas, m)
-    lap    = curves[m.moves[m.imove0]]
+    curves = _curvatures(deltas, moves)
+    lap    = curves[move0]
 
     # maximum and monimum curvatures
-    curmax, icurmax, curmin, icurmin = _maxmin_curvatures(curves, m)
+    curmax, icurmax, curmin, icurmin = _maxmin_curvatures(curves, moves)
 
-    xs, ys = mesh(edges)
+    #xs, ys = mesh(edges)
 
     # nodes
-    xnodes = _nodes(contents, igrad, m)
-    xborders, xneigh = _neighbour_node((xs, ys), xnodes, edges, steps, m)
+    xnodes = _nodes(igrad, cells, moves)
+    xborders, xneigh = _neighbour_node(ucoors, xnodes, edges, steps, moves)
+
+	xlinks = _links(xnodes, xneigh)
 
     # output
-    return (edges = (xedges, yedges),  coors = (xs, ys), contents = contents,
-            grad = grad, igrad = igrad,
-            lap = lap, curves = curves,
-            curmax = curmax, icurmax = icurmax,
-            curmin = curmin, icurmin = icurmin,
+    return (edges = edges,  coors = coors, contents = contents[cells],
+			cells = cells,
+            grad = grad[cells], igrad = igrad[cells],
+            lap = lap[cells], #curves = curves,
+            curmax = curmax[cells], icurmax = icurmax[cells],
+            curmin = curmin[cells], icurmin = icurmin[cells],
             nodes  = xnodes,
-            nborders = xborders, neighbour_node = xneigh)
+            nborders = xborders[cells], nodes_edges = xlinks)
 
 end
 
+
+#--- Public
+#
+# function mesh(edges)
+#     nx, ny  = length(edges[1])-1, length(edges[2])-1
+#     centers = [(edge[2:end] + edge[1:end-1])./2 for edge in edges]
+#     xm = ones(ny)'   .* centers[1]
+#     ym = centers[2]' .* ones(nx)
+#     return xm, ym
+# end
+#
+
+# function _mesh3d(x, y, z)
+# 	xv = getindex.(Iterators.product(x, y, z), 1)  # first.(Iterators.product(x, y, z), 1) is also ok
+# 	yv = getindex.(Iterators.product(x, y, z), 2)
+# 	zv = getindex.(Iterators.product(x, y, z), 3)
+# 	return xv, yv, zv
+# end
+
+#
+# function quiver(idir, m, steps)
+#     xstep, ystep = steps
+#     uus = [m.dmoves[k] for k in vec(idir)]
+#     us = [xi * 0.8 * xstep for (xi, yi) in uus]
+#     vs = [yi * 0.8 * ystep for (xi, yi) in uus]
+#     return us, vs
+# end
+#
+# """
+# linear scale a vector of values between a minimum and a maximum
+#
+# Parameters:
+# 	var : Vector{Real}
+# 	emin: Real
+# 	emax: Real
+#
+# Return:
+# 	vvar: Vector{Real}
+#
+# """
+# function vscale(var, emin = 1, emax = 4)
+# 	vvar = (var .- minimum(var)) ./(maximum(var) - minimum(var)) .*(emax-emin) .+ emin
+# 	return vvar
+# end
 
 end # end of module
