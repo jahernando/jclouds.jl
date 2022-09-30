@@ -108,7 +108,7 @@ md"""
 # ╔═╡ a689debb-8763-45c4-a03d-94c8e970b243
 begin
 
-blabel = @bind label Select([:contents, :grad, :igrad, :lap, :curmax, :icurmax, :curmin, :icurmin, :nodes, :nborders])
+blabel = @bind label Select([:contents, :grad, :lap, :curmax, :curmin, :nodes, :nborders])
 	
 #blabel = @bind typeevt Select(coll(:contents, :grad, :lap, :curmin, :curmax, :nodes, :nbordes))
 	
@@ -140,9 +140,9 @@ function line(;ndim = 3, threshold = 0.)
 
 	tstep = 0.1
 	ts = 0:tstep:1.
-	ax, bx, cx = 5., 0., 1.
-	ay, by, cy = -5., -5., -1.
-	az, bz, cz = 1., -1., 0.
+	ax, bx, cx = 5., 0., 0.
+	ay, by, cy = -5., -5., 0.
+	az, bz, cz = 5., -5., 0.
 	xx = cx .* ts .* ts + ax .* ts .+ bx
 	yy = cy .* ts .* ts + ay .* ts .+ by
 	zz = cz .* ts .* ts + az .* ts .+ bz 
@@ -198,23 +198,53 @@ steps of the voxels: $(steps[1])
 """
 end
 
+# ╔═╡ 8dca9736-1140-495c-98a3-4cb5acc8ffc1
+begin
+vals = getfield(xcl, label)
+minv, maxv = minimum(vals), maximum(vals)
+end;
+
+# ╔═╡ f17d0274-4a61-423c-a76f-870dcef41a60
+begin
+brange0 = @bind v0 Slider(minv:maxv, default = minv)
+brange1 = @bind v1 Slider(minv:maxv, default = maxv)
+md"""
+
+Selec range for variable $(label):
+
+minimum $(brange0)
+maximum  $(brange1)
+
+"""
+end
+
+# ╔═╡ e7544908-23e0-4e3a-ad93-2af5e0dc11f1
+md"""
+
+Selected range : [ $(v0), $(v1) ]
+
+"""
+
 # ╔═╡ dfa64554-5fb1-4d63-80d3-19aee7a476b8
 begin
-function cplot(cl, label, title)
+function cplot(cl, label, title, vrange)
 	ndim = length(cl.coors)
 	vals = getfield(cl, label)
+	mask = (vals .>= vrange[1]) .* (vals .<= vrange[2])
+	coors = [c[mask] for c in cl.coors]
+	vvals = vals[mask]
 	theme(:dark)
-	p1 = ndim == 2 ? histogram2d(cl.coors..., weights = vals, nbins = cl.edges) : p1 = scatter(cl.coors..., zcolor = vals, alpha = 0.1)
-	p2 = histogram(vals, nbins = 100)
+	p1 = ndim == 2 ? histogram2d(coors..., weights = vvals, nbins = cl.edges) : p1 = scatter(coors..., zcolor = vvals, alpha = 0.1)
+	p2 = histogram(vvals, nbins = 100)
 	plot(p1, p2, title = title)
 end
 end
 
 # ╔═╡ d26c89ae-1629-4e98-8bde-3e8abe8bfd8d
-cplot(img, :contents, :contents)
+cplot(img, :contents, :contents, [minimum(img.contents), maximum(img.contents)])
 
 # ╔═╡ 1fab453f-5dab-48bb-87d2-1c92b3f6d7cc
-cplot(xcl, label, label)
+cplot(xcl, label, label, [v0, v1])
 
 # ╔═╡ 16b988b0-887f-4672-b347-9c374fcc3fae
 begin
@@ -249,13 +279,16 @@ end
 # ╟─e8848fd9-205e-4b56-b192-62f1acda8d7e
 # ╠═6c8bf138-8fec-4c69-b4dd-4284faddeed0
 # ╟─1a8e9aa9-a47d-40fd-84c6-cfa49f9b1cc4
-# ╟─d26c89ae-1629-4e98-8bde-3e8abe8bfd8d
+# ╠═d26c89ae-1629-4e98-8bde-3e8abe8bfd8d
 # ╟─5a1832c1-33ff-45dc-8f47-212179dbe862
 # ╠═f5dbdc6d-6676-4e0c-a70e-a5daafbbd9db
 # ╟─4e43c8e3-89e2-44ca-a6ed-48a364d90486
 # ╟─13ac9fdf-46d0-4940-80e3-8619f0609108
 # ╟─a689debb-8763-45c4-a03d-94c8e970b243
-# ╟─1fab453f-5dab-48bb-87d2-1c92b3f6d7cc
+# ╟─8dca9736-1140-495c-98a3-4cb5acc8ffc1
+# ╟─f17d0274-4a61-423c-a76f-870dcef41a60
+# ╟─e7544908-23e0-4e3a-ad93-2af5e0dc11f1
+# ╠═1fab453f-5dab-48bb-87d2-1c92b3f6d7cc
 # ╟─7b7981ca-1540-48a1-88e1-4f27e7787b70
 # ╟─1c402508-afd3-46a1-8dbc-a23fd9bd63e1
 # ╟─a779ac6e-5bac-46f1-b8ef-1e3d5b111f4d
