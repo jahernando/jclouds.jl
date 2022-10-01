@@ -112,13 +112,15 @@ function _maxmin_curvatures(curves, m)
     curmax  = -1e6 .* ones(nsize...)
     icurmax = m.imove0 .* ones(Int, nsize...)
     for (i, move) in enumerate(m.moves)
-        dd = curves[move]
-        mask1 = dd .> curmax
-        curmax[mask1] .= dd[mask1]
-        icurmax[mask1] .= i
-        mask2 = dd .< curmin
-        curmin[mask2] .= dd[mask2]
-        icurmin[mask2] .= i
+		if (i != m.imove0)
+        	dd = curves[move]
+        	mask1 = dd .> curmax
+        	curmax[mask1] .= dd[mask1]
+        	icurmax[mask1] .= i
+        	mask2 = dd .< curmin
+        	curmin[mask2] .= dd[mask2]
+        	icurmin[mask2] .= i
+		end
     end
     return curmax, icurmax, curmin, icurmin
 end

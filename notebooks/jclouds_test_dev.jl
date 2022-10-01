@@ -101,6 +101,92 @@ end
 aa
 end
 
+# ╔═╡ df582445-6873-4829-9cce-82c1fb737b4b
+length(size(aa))
+
+# ╔═╡ c6a33da6-446f-49bb-acd4-6b024538429e
+function _test_clouds(cs)
+
+	# prepare clouds inputs
+	nx, ny = size(cs)
+	is = vcat([[i for j in 1:ny] for i in 1:nx]...)
+	js = repeat([j for j in 1:ny], nx)
+	steps = [1.0, 1.0]
+
+	# create clouds
+	tcl = jc.clouds((is, js), vec(cs), steps)
+
+	# compute extended array 
+	nx, ny = size(cs)
+	aa = zeros(Float64, nx + 2, ny + 2)
+	for i in 1:nx
+		for j in 1:ny
+			aa[i+1, j+1] = cs[i, j] 
+		end
+	end
+	asize = size(aa)
+
+	#moves 
+	moves = [[i, j] for i in -1:1:1 for j in -1:1:1]
+
+	# compute deltas
+	function _delta(aa, move)
+		ai = zeros(Float64, asize...)
+		for i in 2:4
+			for j in 2:4
+				di, dj = move[1], move[2]
+				dmove = sqrt(di*di + dj*dj) 
+				dmove = dmove == 0. ? 1. : dmove
+				ai[i, j] = (aa[i + di, j + dj] - aa[i, j])/dmove
+			end
+		end
+		return ai
+	end
+	deltas = [_delta(aa, move) for move in moves]
+
+	# compute gradient
+	ugrad = zeros(asize...)
+	for delta in deltas
+		mask = delta .> ugrad
+		ugrad[mask] = delta[mask]
+	end
+	ugrad
+
+	# test gradient
+	mask = aa .> 0.0
+	@assert sum(ugrad[mask] .== tcl.grad) == sum(mask)
+
+	# compute and test laplacian
+	lap = reduce(.+, deltas)
+	@assert sum(lap[mask] .== tcl.lap) == sum(mask)
+
+	# compute and test curves and max, min curve
+	curves = [deltas[i] .+ deltas[j] for (i, mi) in enumerate(moves) for (j, mj) in enumerate(moves) if (sum(mi .+ mj) == 0.0) & (sum(mi .* mj) != 0.0) & ( j > i)]
+	curmax = -1e6*ones(asize...)
+	curmin = +1e6*ones(asize...)
+	for curve in curves
+		imask = curve .> curmax
+		curmax[imask] .= curve[imask]
+		imask = curve .< curmin
+		curmin[imask] .= curve[imask]
+	end
+	@assert sum(curmin[mask] .== tcl.curmin) == sum(mask)
+	@assert sum(curmax[mask] .== tcl.curmax) == sum(mask)
+
+	return true
+end
+
+# ╔═╡ f53c0226-7f29-4c80-b017-d4164a251cab
+
+
+# ╔═╡ 988498e0-6bc9-4c4d-9467-a941a848a157
+begin
+ok = _test_clouds(cs)
+end
+
+# ╔═╡ a0c6aa94-ab32-4d92-a4f9-e17bc7682297
+[i*j for i in 1:3 for j in 1:3 if (i == 2) & (j ==2)]
+
 # ╔═╡ f0fe6965-fdbe-4f94-aac3-a41f3cdd63f0
 moves = [[i, j] for i in -1:1:1 for j in -1:1:1]
 
@@ -121,6 +207,17 @@ function _delta(aa, move)
 end
 deltas = [_delta(aa, move) for move in moves]
 end
+
+# ╔═╡ d0f3e7c4-d72f-4822-b683-60ba5767278b
+begin
+curves = [ deltas[i] .+ deltas[j] for (i, mi) in enumerate(moves) for (j, mj) in enumerate(moves) if sum(mi .+ mj) == 0.0]
+maxcurve = -1e6*ones(size(deltas[1])...)
+for curve in curves
+	mask = curve .> maxcurve
+	maxcurve[mask] .= curve[mask]
+end
+maxcurve
+end # begin
 
 # ╔═╡ 62e67f7b-bc7a-4b2c-9800-7f89e7ef8d81
 begin
@@ -446,7 +543,13 @@ end
 # ╟─e8848fd9-205e-4b56-b192-62f1acda8d7e
 # ╠═9e00d479-f411-4dfd-b51f-95dc9efeecd1
 # ╠═a6939579-e310-4ed9-a76d-85d09cba4ce1
+# ╠═df582445-6873-4829-9cce-82c1fb737b4b
+# ╠═c6a33da6-446f-49bb-acd4-6b024538429e
+# ╠═f53c0226-7f29-4c80-b017-d4164a251cab
+# ╠═988498e0-6bc9-4c4d-9467-a941a848a157
+# ╠═a0c6aa94-ab32-4d92-a4f9-e17bc7682297
 # ╠═f0fe6965-fdbe-4f94-aac3-a41f3cdd63f0
+# ╠═d0f3e7c4-d72f-4822-b683-60ba5767278b
 # ╠═76f36865-51d6-4eb5-a242-677aa57427e0
 # ╠═62e67f7b-bc7a-4b2c-9800-7f89e7ef8d81
 # ╠═bf25922a-5b3d-4601-a34b-b014dbd4bd22
