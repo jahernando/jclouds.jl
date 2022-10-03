@@ -176,12 +176,318 @@ function _test_clouds(cs)
 	return true
 end
 
-# ╔═╡ f53c0226-7f29-4c80-b017-d4164a251cab
-
-
 # ╔═╡ 988498e0-6bc9-4c4d-9467-a941a848a157
 begin
 ok = _test_clouds(cs)
+
+md"""
+
+**Clouds has passed the 2d test? $(ok)**
+
+"""
+end
+
+# ╔═╡ 938208b9-9a88-455a-a093-0e9ff4900fe9
+begin
+bs = zeros(3, 3, 3)
+for k in 1:3
+	for i in 1:3
+		for j in 1:3
+		offset = k == 2 ? 2 : 0
+		bs[i, j, k] = 2.0 * cs[i, j] + offset
+		end
+	end
+end
+bs
+end
+
+# ╔═╡ 2c0570a4-c5d0-4a96-9fd9-9618cc1da7f3
+begin
+function _moves(ndim)
+	moves = ndim == 2 ? [[i, j] for i in -1:1:1 for j in -1:1:1] : [[i, j, k] for i in -1:1:1 for j in -1:1:1 for k in -1:1:1]
+	move0 = ndim == 2 ? [0, 0] : [0, 0, 0]
+	kmove0 = [i for (i, move) in enumerate(moves) if (move == move0)][1]
+	smoves = [(i, j) for (i, movei) in enumerate(moves) for (j, movej) in enumerate(moves) if (movei == -1 .* movej ) &  (i > j)]
+	omoves = Dict()
+	for ii in smoves
+		movei = moves[ii[1]]
+		omoves[ii] = [j for (j, movej) in enumerate(moves) if ((sum(movej .* movei) == 0.0) & (sum(movej .* movej) != 0.0))]
+	end
+	return (moves = moves, i0 = kmove0, isym = smoves, iorto = omoves)
+end
+end
+
+# ╔═╡ fcb0a412-ccd6-4406-98f5-cd60ae9f7845
+mm = _moves(3)
+
+# ╔═╡ 2f331294-fa21-431a-928c-0b4d302726ec
+mm.moves[mm.i0]
+
+# ╔═╡ c70469df-5f59-4ea2-94e0-a247966f0f13
+mm.isym
+
+# ╔═╡ 792af853-8220-47e8-8a3f-865decbbeafe
+begin
+for ii in keys(mm.iorto)
+	print([mm.moves[ii[j]] for j in 1:2], " = , ", [mm.moves[kk] for kk in mm.iorto[ii]], '\n')
+end
+end
+
+# ╔═╡ adf969fd-1555-4099-a197-50281e66597e
+begin
+function _test_clouds_new(bs, threshold = 0.0)
+
+	# set the input for clouds
+	ndim   = length(size(bs)) 
+	indices = CartesianIndices(bs)
+	coors = [vec([index[i] for index in indices]) for i in 1:ndim]
+	steps = ones(ndim)
+
+	# call clouds
+	tcl = jc.clouds(coors, vec(bs), steps)
+	
+
+	# prepare the local matrix to compute gradients, laplacian and curvatures
+	nsize  = size(bs) .+ 2	
+	aa    = zeros(Float64, nsize...)
+	for index in indices
+		kindex = CartesianIndex(Tuple(index) .+ 1)
+		aa[kindex] = bs[index]
+	end
+
+	# the mask
+	mask = aa  .>  threshold
+	nmask = aa .<= threshold
+	aa[nmask]  .=  threshold
+	
+	# set the moves
+	mm = _moves(ndim)
+
+	# compute the deltas
+	function _delta(move)
+		delta = zeros(Float64, nsize...)
+		mod   = sqrt(sum(move .* move))
+		mod   = mod == 0.0 ? 1 : mod
+		for index in indices
+			uindex = CartesianIndex(Tuple(index)  .+ 1)
+			kindex = CartesianIndex(Tuple(Tuple(uindex) .+ move))
+			#dd = mask[kindex] ? (aa[kindex] - aa[uindex])/mod : 0.0
+			dd = true ? (aa[kindex] - aa[uindex])/mod : 0.0
+			delta[uindex] = dd
+		end
+		return delta
+	end
+
+	# compute deltas
+	deltas = [_delta(move) for move in mm.moves]
+	return deltas
+
+	# compute gradient
+	ugrad = zeros(Float64, nsize...)
+	igrad = mm.i0 .* ones(Int, nsize...)
+	for (i, delta) in enumerate(deltas)
+		imask = delta .> ugrad 
+		ugrad[imask] = delta[imask]
+		igrad[imask] .= i
+	end
+
+	# test the gradient
+	@assert sum(ugrad[mask] .== tcl.grad)  == sum(mask)
+	@assert sum(igrad[mask] .== tcl.igrad) == sum(mask)
+	print("Ok grad! \n")
+
+	# compute and test laplacian
+	lap = reduce(.+, deltas)
+	@assert sum(lap[mask] .== tcl.lap) == sum(mask)
+	print("Ok laplacian! \n")
+
+		# compute and test curves and max, min curve
+	curves = [deltas[i] .+ deltas[j] for (i, j) in mm.isym]
+	curmax = -1e6*ones(nsize...)
+	curmin = +1e6*ones(nsize...)
+	icurmax = mm.i0 .* ones(Int, nsize...)
+	icurmin = mm.i0 .* ones(Int, nsize...)
+	for (i, curve) in enumerate(curves)
+		imove = mm.isym[i][1]
+		imask = curve .> curmax 
+		curmax[imask] .= curve[imask]
+		icurmax[imask] .= imove
+		imask = curve .< curmin
+		curmin[imask] .= curve[imask]
+		icurmin[imask] .= imove
+	end
+	icurmin[nmask] .= mm.i0
+	icurmax[nmask] .= mm.i0
+
+	@assert sum(curmin[mask] .== tcl.curmin) == sum(mask)
+	@assert sum(curmax[mask] .== tcl.curmax) == sum(mask)
+	#@assert sum(icurmin[mask] .== tcl.icurmin) == sum(mask)
+	#@assert sum(icurmax[mask] .== tcl.icurmax) == sum(mask)
+
+
+	return icurmin[mask], tcl.icurmin
+	
+	#return curmax, curmin, icurmax, icurmin
+	
+end
+	
+end
+
+# ╔═╡ b8476bc1-8ca1-4539-bdbb-71ddf3fa378c
+cs, bs
+
+# ╔═╡ 4efe53aa-83b8-46fa-8418-20023d3df966
+_test_clouds_new(cs, 0.)
+
+# ╔═╡ fc36f3ff-0f90-428b-887c-4761706a3dca
+m2 = _moves(2)
+
+# ╔═╡ b4971b5e-a614-4498-a177-ea218ae10933
+mm.moves[1]
+
+# ╔═╡ 683618f0-6df4-414c-a1d4-6bc27911cc34
+bs
+
+# ╔═╡ eb1c838c-42f7-47d9-98d5-9028f834d7c1
+ones(3)
+
+# ╔═╡ 3638a83e-f986-4752-96e4-a85725387e56
+[i for (i, move) in enumerate(xmoves) if (move == [0, 0, 0])][1]
+
+# ╔═╡ 7349abcb-1462-43e2-98f5-e4e84d114748
+xmoves[24]
+
+# ╔═╡ 17bdc350-b372-40c7-a4b1-6bf5720e03db
+6.0/sqrt(2)
+
+# ╔═╡ fc10da1f-8e07-486b-adc5-db1dc4304448
+xmoves[15]
+
+# ╔═╡ d84f1dcc-ba31-4a03-ba60-dcaea8b24938
+kmoves
+
+# ╔═╡ f7035d4a-01aa-4e58-9761-e3e2e346ccd0
+bs
+
+# ╔═╡ 6b14de6e-b40e-4017-94dd-2d34cfa66000
+xmoves[5]
+
+# ╔═╡ d8626b01-5007-45f2-b47e-b955fc8858ee
+CartesianIndices(bs) .+ xmoves[1]
+
+# ╔═╡ abda946a-f1b3-4306-9f30-d710fe5e80bd
+sum(xmoves[1] .* xmoves[2])
+
+# ╔═╡ 696e4101-c218-4988-b2f5-0d617f386283
+xmoves
+
+# ╔═╡ 04b6be28-ed7a-49c6-82c0-1666645e3f98
+xmoves[1] .* xmoves[2]
+
+# ╔═╡ 3f03a5ef-ecf4-48dc-bd56-71d365f5e553
+xaa
+
+# ╔═╡ bbc9921b-8429-40f8-bc02-93b294f3f3d3
+bs
+
+# ╔═╡ a1300bcc-ff12-4614-91cf-efbc4791f71a
+bs
+
+# ╔═╡ 3862afd3-fb51-482e-bbe6-ce8d20ec895b
+begin
+i1  = xindices[1] 
+ii1 = CartesianIndex(Tuple(i1) .+ 1)
+i1, ii1, bs[i1], bs[ii1]
+end
+
+# ╔═╡ ef73a5ad-e7dc-4bfc-8c06-5680b3f28c85
+bs[ii]
+
+# ╔═╡ b22dec95-bc58-44fe-b29e-af335c54e710
+xndim
+
+# ╔═╡ 6f5acf59-2a84-4b59-8010-fbd07b769429
+function _test_clouds_3d(cs)
+
+	# prepare clouds inputs
+	ndim   = length(size(cs))
+	nsize  = size(cs) .+ 2
+	aa    = zeros(Float64, nsize...)
+	indices = CartesianIndices(aa)
+	coors = [[index[i] for index in indices] for i in 1:ndim]
+	
+	ndim   = length(cs)
+	asize  = size(cs) .+ 2
+	aa     = zeros(Float64, nsize...)
+	
+	coors  = zeros()
+	is = vcat([[i for j in 1:ny] for i in 1:nx]...)
+	js = repeat([j for j in 1:ny], nx)
+	steps = [1.0, 1.0]
+
+bcoors = [[index[i] for index in indices] for i in 1:3]
+	
+	# create clouds
+	tcl = jc.clouds((is, js), vec(cs), steps)
+
+	# compute extended array 
+	nx, ny = size(cs)
+	aa = zeros(Float64, nx + 2, ny + 2)
+	for i in 1:nx
+		for j in 1:ny
+			aa[i+1, j+1] = cs[i, j] 
+		end
+	end
+	asize = size(aa)
+
+	#moves 
+	moves = [[i, j] for i in -1:1:1 for j in -1:1:1]
+
+	# compute deltas
+	function _delta(aa, move)
+		ai = zeros(Float64, asize...)
+		for i in 2:4
+			for j in 2:4
+				di, dj = move[1], move[2]
+				dmove = sqrt(di*di + dj*dj) 
+				dmove = dmove == 0. ? 1. : dmove
+				ai[i, j] = (aa[i + di, j + dj] - aa[i, j])/dmove
+			end
+		end
+		return ai
+	end
+	deltas = [_delta(aa, move) for move in moves]
+
+	# compute gradient
+	ugrad = zeros(asize...)
+	for delta in deltas
+		mask = delta .> ugrad
+		ugrad[mask] = delta[mask]
+	end
+	ugrad
+
+	# test gradient
+	mask = aa .> 0.0
+	@assert sum(ugrad[mask] .== tcl.grad) == sum(mask)
+
+	# compute and test laplacian
+	lap = reduce(.+, deltas)
+	@assert sum(lap[mask] .== tcl.lap) == sum(mask)
+
+	# compute and test curves and max, min curve
+	curves = [deltas[i] .+ deltas[j] for (i, mi) in enumerate(moves) for (j, mj) in enumerate(moves) if (sum(mi .+ mj) == 0.0) & (sum(mi .* mj) != 0.0) & ( j > i)]
+	curmax = -1e6*ones(asize...)
+	curmin = +1e6*ones(asize...)
+	for curve in curves
+		imask = curve .> curmax
+		curmax[imask] .= curve[imask]
+		imask = curve .< curmin
+		curmin[imask] .= curve[imask]
+	end
+	@assert sum(curmin[mask] .== tcl.curmin) == sum(mask)
+	@assert sum(curmax[mask] .== tcl.curmax) == sum(mask)
+
+	return true
 end
 
 # ╔═╡ a0c6aa94-ab32-4d92-a4f9-e17bc7682297
@@ -207,6 +513,9 @@ function _delta(aa, move)
 end
 deltas = [_delta(aa, move) for move in moves]
 end
+
+# ╔═╡ c66c5247-09de-426b-a9d3-ffb2f69c5edf
+_delta(xmoves[5])
 
 # ╔═╡ d0f3e7c4-d72f-4822-b683-60ba5767278b
 begin
@@ -545,8 +854,39 @@ end
 # ╠═a6939579-e310-4ed9-a76d-85d09cba4ce1
 # ╠═df582445-6873-4829-9cce-82c1fb737b4b
 # ╠═c6a33da6-446f-49bb-acd4-6b024538429e
-# ╠═f53c0226-7f29-4c80-b017-d4164a251cab
 # ╠═988498e0-6bc9-4c4d-9467-a941a848a157
+# ╠═938208b9-9a88-455a-a093-0e9ff4900fe9
+# ╠═2c0570a4-c5d0-4a96-9fd9-9618cc1da7f3
+# ╠═fcb0a412-ccd6-4406-98f5-cd60ae9f7845
+# ╠═2f331294-fa21-431a-928c-0b4d302726ec
+# ╠═c70469df-5f59-4ea2-94e0-a247966f0f13
+# ╠═792af853-8220-47e8-8a3f-865decbbeafe
+# ╠═adf969fd-1555-4099-a197-50281e66597e
+# ╠═b8476bc1-8ca1-4539-bdbb-71ddf3fa378c
+# ╠═4efe53aa-83b8-46fa-8418-20023d3df966
+# ╠═fc36f3ff-0f90-428b-887c-4761706a3dca
+# ╠═b4971b5e-a614-4498-a177-ea218ae10933
+# ╠═683618f0-6df4-414c-a1d4-6bc27911cc34
+# ╠═eb1c838c-42f7-47d9-98d5-9028f834d7c1
+# ╠═3638a83e-f986-4752-96e4-a85725387e56
+# ╠═7349abcb-1462-43e2-98f5-e4e84d114748
+# ╠═17bdc350-b372-40c7-a4b1-6bf5720e03db
+# ╠═fc10da1f-8e07-486b-adc5-db1dc4304448
+# ╠═d84f1dcc-ba31-4a03-ba60-dcaea8b24938
+# ╠═f7035d4a-01aa-4e58-9761-e3e2e346ccd0
+# ╠═c66c5247-09de-426b-a9d3-ffb2f69c5edf
+# ╠═6b14de6e-b40e-4017-94dd-2d34cfa66000
+# ╠═d8626b01-5007-45f2-b47e-b955fc8858ee
+# ╠═abda946a-f1b3-4306-9f30-d710fe5e80bd
+# ╠═696e4101-c218-4988-b2f5-0d617f386283
+# ╠═04b6be28-ed7a-49c6-82c0-1666645e3f98
+# ╠═3f03a5ef-ecf4-48dc-bd56-71d365f5e553
+# ╠═bbc9921b-8429-40f8-bc02-93b294f3f3d3
+# ╠═a1300bcc-ff12-4614-91cf-efbc4791f71a
+# ╠═3862afd3-fb51-482e-bbe6-ce8d20ec895b
+# ╠═ef73a5ad-e7dc-4bfc-8c06-5680b3f28c85
+# ╠═b22dec95-bc58-44fe-b29e-af335c54e710
+# ╠═6f5acf59-2a84-4b59-8010-fbd07b769429
 # ╠═a0c6aa94-ab32-4d92-a4f9-e17bc7682297
 # ╠═f0fe6965-fdbe-4f94-aac3-a41f3cdd63f0
 # ╠═d0f3e7c4-d72f-4822-b683-60ba5767278b
