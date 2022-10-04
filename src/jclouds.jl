@@ -89,7 +89,7 @@ function clouds(coors, energy, steps, threshold = 0.)
 	cells    = findall(x -> x .> threshold, contents)
 
     # deltas
-    deltas = _deltas(ucoors, energy, edges, steps, mm)
+    deltas = _deltas(ucoors, energy, edges, steps, mm, threshold)
 
     # gradient
     grad, igrad = _gradient(deltas, mm)
@@ -133,12 +133,19 @@ function _hcoors(ucoors, move)
 	return zt
 end
 
-function _deltas(ucoors, energy, edges, steps, m)
+
+function _deltas(ucoors, energy, edges, steps, m, threshold)
 
     his = [SB.fit(SB.Histogram, _hcoors(ucoors, steps .* move),
 		SB.weights(energy), edges) for move in m.moves]
     contents = deepcopy(his[m.i0].weights)
-    deltas   = [h.weights .- contents for h in his]
+	asize = Base.size(contents)
+	mask = contents .<= threshold
+	deltas   = [h.weights .- contents for h in his]
+	for (delta, h) in zip(deltas, his)
+		delta[h.weights .<= threshold] .= 0.0
+		delta[mask] .= 0.0
+	end
 
     dsteps   = [LA.norm(steps .* move) for move in m.moves]
     dsteps[m.i0] = 1.
@@ -165,8 +172,8 @@ function _curvatures(deltas, m)
 
     curvs = Dict()
     for smove in m.isym
-       # curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in m.iortho[smove]])
-		curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in smove])
+       curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in m.iortho[smove]])
+		#curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in smove])
     end
     return curvs
 end
