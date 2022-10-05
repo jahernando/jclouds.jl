@@ -172,8 +172,8 @@ function _curvatures(deltas, m)
 
     curvs = Dict()
     for smove in m.isym
-       curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in m.iortho[smove]])
-		#curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in smove])
+       #curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in m.iortho[smove]])
+	   curvs[smove[1]] = reduce(.+, [deltas[kmove] for kmove in smove])
     end
     return curvs
 end
